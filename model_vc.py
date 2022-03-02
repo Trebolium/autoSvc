@@ -251,7 +251,6 @@ class Generator(nn.Module):
         self.postnet = Postnet(num_feats)
 
     def forward(self, x, c_org, c_trg):
-
         # codes is a LIST of tensors                
         codes, saved_enc_outs = self.encoder(x, c_org)
         # if no c_trg given, then just return the formatted encoder codes

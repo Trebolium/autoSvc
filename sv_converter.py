@@ -22,7 +22,7 @@ def save_ckpt(model, model_optimizer, loss, iteration, save_path):
 # SOLVER IS THE MAIN SETUP FOR THE NN ARCHITECTURE. INSIDE SOLVER IS THE GENERATOR (G)
 class AutoSvc(object):
 
-    def __init__(self, data_loader, config, feat_params, mel_params=None):
+    def __init__(self, data_loader, config, SIE_params, SVC_params=None):
         """Initialize configurations.""" 
         self.config = config
 
@@ -31,8 +31,9 @@ class AutoSvc(object):
         else:
             self.writer = SummaryWriter(comment = '_' +self.config.file_name)
 
-        self.feat_params = feat_params
-        self.mel_params = mel_params
+        self.SIE_params = SIE_params
+        if config.diff_svc_feats_dir != '':
+            self.SVC_params = SVC_params
         self.data_loader = data_loader
 
         # Miscellaneous.
@@ -54,6 +55,7 @@ class AutoSvc(object):
         for i, (key, val) in enumerate(sie_checkpoint['model_state'].items()):
             print(f'layer {key} weight shape: {val.shape}')    
             new_state_dict[key] = val
+        
         self.sie = SingerIdEncoder(self.device, self.loss_device, sie_num_voices_used, sie_num_feats_used) # don't know why this continues to change
         for param in self.sie.parameters():
             param.requires_grad = False
@@ -66,10 +68,12 @@ class AutoSvc(object):
         self.sie.to(self.device)
         self.sie.eval()
 
-        if self.config.use_mel: 
-            self.G = Generator(self.config.dim_neck, self.config.dim_emb, self.config.dim_pre, self.config.freq, self.mel_params['num_feats'])        
+
+        #if feats between SIE and SVC should be different
+        if self.config.diff_svc_feats_dir != '': 
+            self.G = Generator(self.config.dim_neck, self.config.dim_emb, self.config.dim_pre, self.config.freq, self.SVC_params['num_feats'])        
         else:
-            self.G = Generator(self.config.dim_neck, self.config.dim_emb, self.config.dim_pre, self.config.freq, self.feat_params['num_feats'])        
+            self.G = Generator(self.config.dim_neck, self.config.dim_emb, self.config.dim_pre, self.config.freq, self.SIE_params['num_feats'])        
         self.g_optimizer = torch.optim.Adam(self.G.parameters(), self.config.adam_init)
         if self.config.ckpt_weights!='':
             ckpt_path = os.path.join(self.config.model_dir, self.config.ckpt_weights)
@@ -106,37 +110,40 @@ class AutoSvc(object):
         def batch_iterate():
     
             for i in range(current_iter+1, (current_iter+1 + cycle_size)):
+
+                if i > 200:
+                    pdb.set_trace()
                 
-                ""
-                if self.config.use_mel:
+                if self.config.diff_svc_feats_dir != '':
                     try:
-                        x_real, x_real_mel, dataset_idx, example_id = next(data_iter)
-                    except:
+                        SIE_x, SVC_x, dataset_idx, example_id = next(data_iter)
+                    except UnboundLocalError:
                         data_iter = iter(data_loader)
-                        x_real, x_real_mel, dataset_idx, example_id = next(data_iter)
-                    x_real_mel = x_real_mel.to(self.device).float() 
-                    emb_org, _ = self.sie(x_real_mel)
-                    x_identic, x_identic_psnt, code_real, _, _ = self.G(x_real_mel, emb_org, emb_org)
+                        SIE_x, SVC_x, dataset_idx, example_id = next(data_iter)
+                    except RuntimeError:
+                        pdb.set_trace()
+                    SVC_x = SVC_x.to(self.device).float()
+                    SIE_x = SIE_x.to(self.device).float() 
+                    emb_org, _ = self.sie(SIE_x)
+                    x_identic, x_identic_psnt, code_real, _, _ = self.G(SVC_x, emb_org, emb_org)
+                    main_x = SVC_x
 
                 else:
                     try:
-                        x_real, dataset_idx, example_id = next(data_iter)
+                        main_x, dataset_idx, example_id = next(data_iter)
                     except:
                         data_iter = iter(data_loader)
-                        x_real, dataset_idx, example_id = next(data_iter)
-                    x_real = x_real.to(self.device).float() 
-                    emb_org, _ = self.sie(x_real)                
-                    x_identic, x_identic_psnt, code_real, _, _ = self.G(x_real, emb_org, emb_org)
-
-#                elif self.config.which_embs == 'spkrid-avg':
-#                    emb_org = dataset_idx[1].to(self.device).float() # because Vctk datalaoder is configured this way 
+                        main_x, dataset_idx, example_id = next(data_iter)
+                    main_x = main_x.to(self.device).float() 
+                    emb_org, _ = self.sie(main_x)                
+                    x_identic, x_identic_psnt, code_real, _, _ = self.G(main_x, emb_org, emb_org)
                 
                 residual_from_psnt = x_identic_psnt - x_identic
                 x_identic = x_identic.squeeze(1)
                 x_identic_psnt = x_identic_psnt.squeeze(1)
                 residual_from_psnt = residual_from_psnt.squeeze(1)
-                g_loss_id = F.l1_loss(x_real, x_identic)   
-                g_loss_id_psnt = F.l1_loss(x_real, x_identic_psnt)   
+                g_loss_id = F.l1_loss(main_x, x_identic)   
+                g_loss_id_psnt = F.l1_loss(main_x, x_identic_psnt)   
                 code_reconst = self.G(x_identic_psnt, emb_org, None)
                 g_loss_cd = F.l1_loss(code_real, code_reconst)
 
@@ -162,9 +169,7 @@ class AutoSvc(object):
                     log_list.append(log)
 
                 if mode == 'train':
-                    # if self.config.with_cd ==True:
-                    #     g_loss = (self.config.prnt_loss_weight * g_loss_id) + (self.config.psnt_loss_weight * g_loss_id_psnt) + (self.config.lambda_cd * g_loss_cd)
-                    # else:
+
                     g_loss = (self.config.prnt_loss_weight * g_loss_id) + (self.config.psnt_loss_weight * g_loss_id_psnt) #+ ((self.config.lambda_cd  * (i / 100000)) * g_loss_cd)
                     
                     self.reset_grad()
@@ -173,12 +178,12 @@ class AutoSvc(object):
                     # spec nad freq have to be multiple of cycle_size
                     if i % self.config.spec_freq == 0:
                         print('plotting specs')
-                        x_real = x_real.cpu().data.numpy()
+                        main_x = main_x.cpu().data.numpy()
                         x_identic = x_identic.cpu().data.numpy()
                         x_identic_psnt = x_identic_psnt.cpu().data.numpy()
                         residual_from_psnt = residual_from_psnt.cpu().data.numpy()
                         specs_list = []
-                        for arr in x_real:
+                        for arr in main_x:
                             specs_list.append(arr)
                         for arr in x_identic:
                             specs_list.append(arr)
@@ -197,25 +202,12 @@ class AutoSvc(object):
                                 spec = spec - np.min(spec)
                                 plt.clim(0,1)
                             plt.imshow(spec)
-                            try:
-                                name = 'Egs ' +str(example_id[j%2]) +', ds_idx ' +str(dataset_idx[j%2])
-                            except:
-                                pdb.set_trace()
+                            name = 'Egs ' +str(example_id[j%2]) +', ds_idx ' +str(dataset_idx[j%2])
                             plt.title(name)
                             plt.colorbar()
                         plt.savefig(self.config.model_dir +'/' +self.config.file_name +'/image_comparison/' +str(i) +'iterations')
                         plt.close()
         
-                    # if i % self.config.ckpt_freq == 0:
-                    #     save_ckpt(self.G, self.g_optimizer, loss, i, ckpt_path)
-                # elif mode.startswith('val'):
-                #     print(losses_list[0])
-                    # if self.EarlyStopping.check(losses_list[0]):
-                    #     print(f"""Early stopping called at iteration {i}.\n
-                    #         The lowest loss {self.EarlyStopping.lowest_loss} has not decreased since {self.config.patience} iterations.\n
-                    #         Saving model...""")
-                    #     save_ckpt(self.G, self.g_optimizer, loss, i, save_path)
-                    #     exit(0)
             return losses_list, (current_iter + cycle_size)
 
 #=====================================================================================================================================#

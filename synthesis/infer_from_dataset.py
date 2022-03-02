@@ -27,7 +27,7 @@ model_name = inputs.use_model
 cudnn.benchmark = True
 convert_style = inputs.convert_style
 use_avg_vte = inputs.use_avg_vte
-autovc_model_saves_dir = '/homes/bdoc3/my_data/autovc_data/autoStc/'
+autovc_model_saves_dir = '/homes/bdoc3/my_data/autovc_models/autoStc/'
 autovc_model_dir = autovc_model_saves_dir + model_name
 config = pickle.load(open(autovc_model_dir +'/config.pkl','rb'))
 ckpt_iters = inputs.ckpt_iters
@@ -59,7 +59,7 @@ subdir_for_wavs = autovc_model_dir +'/generated_wavs/' +str(ckpt_iters) +'iters'
 if os.path.exists(subdir_for_wavs)==False:
             os.makedirs(subdir_for_wavs)
 
-sys.path.insert(1, '/homes/bdoc3/my_data/autovc_data') # usually the cwd is priority, so index 1 is good enough for our purposes here
+sys.path.insert(1, '/homes/bdoc3/my_data/autovc_models') # usually the cwd is priority, so index 1 is good enough for our purposes here
 from hparams import hparams
 
 import torch
@@ -70,7 +70,7 @@ from synthesis import build_model
 from synthesis import wavegen
 
 model = build_model().to(config.device)
-checkpoint = torch.load("/homes/bdoc3/my_data/autovc_data/checkpoint_step001000000_ema.pth")
+checkpoint = torch.load("/homes/bdoc3/my_data/autovc_models/checkpoint_step001000000_ema.pth")
 model.load_state_dict(checkpoint["state_dict"])
 model.to(config.device)
 find_male = True

@@ -50,9 +50,9 @@ class DampMelWorld(Dataset):
         #     pdb.set_trace()
         return adjusted_SIE_feats, adjusted_SVC_feats, singer_id, example_id
 
-    def __len__(self):
-        """Return the number of spkrs."""
-        return self.num_singers
+    # def __len__(self):
+    #     """Return the number of spkrs."""
+    #     return self.num_singers
 
 class DampDataset(Dataset):
     """Retrieves features from path.
@@ -76,7 +76,7 @@ class DampDataset(Dataset):
                     singer_clips[singer_id] = [(features, singer_id, song_id)]
                 else:
                     singer_clips[singer_id].append((features, singer_id, song_id))
-        self.dataset = [content for content in singer_clips.values()]
+        self.dataset = [content for singer, content in singer_clips.items()]
         self.num_songs = num_songs
         self.num_singers = len(self.dataset)
 

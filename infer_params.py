@@ -1,7 +1,7 @@
 
 # paths, dirs, trg ds
 svc_model_name = 'defaultName'
-model_dir = '/homes/bdoc3/my_data/autovc_data/autoSvc'
+model_dir = '/homes/bdoc3/my_data/autovc_models/autoSvc'
 feature_dir = '/homes/bdoc3/my_data/spmel_data/damp_inton/binNormmed_split_by_voice'
 use_loader = 'vocal'
 
@@ -30,7 +30,7 @@ which_embs = 'sie-live'
 # data details
 chunk_num = 6
 chunk_seconds = 0.5
-len_crop = 160
+autosvc_crop = 160
 
 # schedulers
 ckpt_freq = 50000

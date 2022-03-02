@@ -42,7 +42,7 @@ def new_dir_setup(config):
     with open(model_dir_path +'/config.yaml', 'w') as config_file:
         yaml.dump(config_dict, config_file, default_flow_style=False)
     # open(model_dir_path +'/config.txt', 'a').write(str(config))
-    copyfile(config.feature_dir +'/feat_params.yaml', (model_dir_path +'/feat_params.py'))
+    copyfile(config.SIE_feat_dir +'/feat_params.yaml', (model_dir_path +'/SIE_feats_params.py'))
     copyfile('./model_vc.py',(model_dir_path +'/this_model_vc.py'))
     copyfile('./sv_converter.py',(model_dir_path +'/sv_converter.py'))
     copyfile('./main.py',(model_dir_path +'/main.py'))
@@ -73,27 +73,28 @@ def process_config(config):
         raise Exception(f"ckpt_freq {config.ckpt_freq} and spec_freq {config.spec_freq} need to be a multiple of val_iter {int(config.train_iter*0.2)}")
 
 "Load the primary dataloader"
-def load_primary_dataloader(config, feat_params, subset_name, mel_params=None):
-    if config.use_mel != '':
-       dataset = DampMelWorld(config, feat_params, mel_params, os.path.join(config.feature_dir, subset_name), os.path.join(config.mel_dir, subset_name)) 
+def load_primary_dataloader(config, SIE_feats_params, subset_name, SVC_feats_params=None):
+    if config.diff_svc_feats_dir != '':
+       dataset = DampMelWorld(config, SIE_feats_params, SVC_feats_params, os.path.join(config.SIE_feat_dir, subset_name), os.path.join(config.diff_svc_feats_dir, subset_name)) 
     else:
-        dataset = DampDataset(config, feat_params['num_feats'], os.path.join(config.feature_dir, subset_name))
+        dataset = DampDataset(config, SIE_feats_params['num_feats'], os.path.join(config.SIE_feat_dir, subset_name))
     loader = DataLoader(dataset, batch_size=config.batch_size, shuffle=True, drop_last=True)
+    pdb.set_trace()
     return dataset, loader
 
 "generate dataloaders for validation"
-def load_val_dataloaders(config, feat_params, mel_params=None):
-    config.medley_data_path = '/homes/bdoc3/my_data/autovc_data/medleydb_singer_chunks/singer_chunks_metadata.pkl'
+def load_val_dataloaders(config, SIE_feats_params, SVC_feats_params=None):
+    config.medley_data_path = '/homes/bdoc3/my_data/spmel_data/medley/singer_chunks_metadata.pkl'
     config.vocal_data_path = '/homes/bdoc3/my_data/phonDet/spmel_autovc_params_normalized'
-    config.vctk_data_path = '/homes/bdoc3/my_data/autovc_data/all_meta_data.pkl'
-    medleydb = SpecChunksFromPkl(config, feat_params)
-    vocalset = VocalSetDataset(config, feat_params)
+    config.vctk_data_path = '/homes/bdoc3/my_data/spmel_data/medley/all_meta_data.pkl'
+    medleydb = SpecChunksFromPkl(config, SIE_feats_params)
+    vocalset = VocalSetDataset(config, SIE_feats_params)
     vctk = VctkFromMeta(config)
     
-    if config.use_mel != '':
-        damp = DampMelWorld(config, feat_params, mel_params, os.path.join(config.feature_dir, 'val'), os.path.join(config.mel_dir, 'val'))
+    if config.diff_svc_feats_dir != '':
+        damp = DampMelWorld(config, SIE_feats_params, SVC_feats_params, os.path.join(config.SIE_feat_dir, 'val'), os.path.join(config.diff_svc_feats_dir, 'val'))
     else:
-        damp = DampDataset(config, feat_params['num_feats'], os.path.join(config.feature_dir, 'val'))
+        damp = DampDataset(config, SIE_feats_params['num_feats'], os.path.join(config.SIE_feat_dir, 'val'))
     
     datasets = [medleydb, vocalset, vctk, damp]
     print('Finished loading the datasets...')
@@ -128,35 +129,35 @@ def main(config):
 
     cudnn.benchmark = True # For fast training.
     random.seed(1)
-    with open(os.path.join(config.feature_dir, 'feat_params.yaml')) as File:
-        feat_params = yaml.load(File, Loader=yaml.FullLoader)
-    if config.use_mel != '':
-        with open(os.path.join(config.use_mel, 'feat_params.yaml')) as File:
-            mel_params = yaml.load(File, Loader=yaml.FullLoader)
+    with open(os.path.join(config.SIE_feat_dir, 'feat_params.yaml')) as File:
+        SIE_feats_params = yaml.load(File, Loader=yaml.FullLoader)
+    if config.diff_svc_feats_dir != '':
+        with open(os.path.join(config.diff_svc_feats_dir, 'feat_params.yaml')) as File:
+            SVC_feats_params = yaml.load(File, Loader=yaml.FullLoader)
 
     "Prepare datasets"
-    if config.use_mel != '':
-        train_dataset, train_loader = load_primary_dataloader(config, feat_params, 'train', mel_params)
+    if config.diff_svc_feats_dir != '':
+        train_dataset, train_loader = load_primary_dataloader(config, SIE_feats_params, 'train', SVC_feats_params)
     else:
-        train_dataset, train_loader = load_primary_dataloader(config, feat_params, 'train')
+        train_dataset, train_loader = load_primary_dataloader(config, SIE_feats_params, 'train')
 
     # config.class_layer_dim = train_dataset.num_singers
     if config.eval_all == True:
-        if config.use_mel != '':
-            val_loaders = load_val_dataloaders(config, feat_params, mel_params)
+        if config.diff_svc_feats_dir != '':
+            val_loaders = load_val_dataloaders(config, SIE_feats_params, SVC_feats_params)
         else:
-            val_loaders = load_val_dataloaders(config, feat_params)
+            val_loaders = load_val_dataloaders(config, SIE_feats_params)
     else:
-        if config.use_mel != '':
-            _, val_loader = load_primary_dataloader(config, feat_params, 'val', mel_params)
+        if config.diff_svc_feats_dir != '':
+            _, val_loader = load_primary_dataloader(config, SIE_feats_params, 'val', SVC_feats_params)
         else:
-            _, val_loader = load_primary_dataloader(config, feat_params, 'val')
+            _, val_loader = load_primary_dataloader(config, SIE_feats_params, 'val')
         val_loaders = [('damp', val_loader)]
 
-    if config.use_mel != '':
-        solver = AutoSvc(train_loader, config, feat_params, mel_params)
+    if config.diff_svc_feats_dir != '':
+        solver = AutoSvc(train_loader, config, SIE_feats_params, SVC_feats_params)
     else:
-        solver = AutoSvc(train_loader, config, feat_params)
+        solver = AutoSvc(train_loader, config, SIE_feats_params)
     current_iter = solver.get_current_iters()
     log_list = []
     "training phase"
@@ -174,11 +175,12 @@ def main(config):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # dirs and files
-    parser.add_argument('--file_name', '-fn', type=str, default='defaultName')
-    parser.add_argument('--model_dir', type=str, default='/homes/bdoc3/my_data/autovc_data/autoSvc', help='path to config file to use')
-    parser.add_argument('--feature_dir', '-fd', type=str, default='/homes/bdoc3/my_data/world_vocoder_data/damp_inton/withF0chandna_to_500_unnormed')
+    parser.add_argument('-fn', '--file_name', type=str, default='defaultName')
+    parser.add_argument('-md', '--model_dir', type=str, default='/homes/bdoc3/my_data/autovc_models/autoSvc', help='path to config file to use')
+    parser.add_argument('-sie_d', '--SIE_feat_dir', type=str, default='/homes/bdoc3/my_data/world_vocoder_data/damp_inton/withF0chandna_to_500_unnormed')
+    parser.add_argument('-df', '--diff_svc_feats_dir', type=str, default='', help='dataloader output sequence length')
     parser.add_argument('--ckpt_weights', type=str, default='', help='path to the ckpt model want to use')
-    parser.add_argument('--sie_path', type=str, default='/homes/bdoc3/singer-identity-encoder/encoder/saved_models/dampInton500Voices_chandnaProcessing_unnormed_ge2e', help='toggle checkpoint load function')
+    parser.add_argument('--sie_path', type=str, default='/homes/bdoc3/my_data/autovc_models/singer_identity_encoder/dampInton500Voices_chandnaProcessing_unnormed_ge2e', help='toggle checkpoint load function')
     # model inits
     parser.add_argument('--which_cuda', type=int, default=0, help='Determine which cuda driver to use')
     parser.add_argument('--use_ckpt_config', type=str2bool, default=False, help='path to config file to use')
@@ -189,8 +191,7 @@ if __name__ == '__main__':
     parser.add_argument('--dim_pre', type=int, default=512)
     parser.add_argument('--freq', type=int, default=16)
     # dataset params
-    parser.add_argument('--use_loader', type=str, default='vocal', help='take singer ids to exclude from the VTEs config.test_list')
-    parser.add_argument('--use_mel', type=str, default='', help='dataloader output sequence length')
+    parser.add_argument('--use_loader', type=str, default='damp', help='take singer ids to exclude from the VTEs config.test_list')
     parser.add_argument('--chunk_seconds', type=float, default=0.5, help='dataloader output sequence length')
     parser.add_argument('--chunk_num', type=int, default=6, help='dataloader output sequence length')
     parser.add_argument('--eval_all', type=str2bool, default=False, help='determines whether to evaluate main dataset or all datasets')
@@ -200,11 +201,11 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', type=int, default=2, help='mini-batch size')
     parser.add_argument('--max_iters', type=int, default=1000000, help='number of total iterations')
     parser.add_argument('--train_size', type=int, default=20, help='Define how many speakers are used in the training set')
-    parser.add_argument('--len_crop', type=int, default=160, help='dataloader output sequence length')
+    parser.add_argument('--autosvc_crop', type=int, default=192, help='dataloader output sequence length')
     parser.add_argument('--psnt_loss_weight', type=float, default=1.0, help='Determine weight applied to postnet reconstruction loss')
     parser.add_argument('--prnt_loss_weight', type=float, default=1.0, help='Determine weight applied to pre-net reconstruction loss')
     # Scheduler parameters
-    parser.add_argument('--patience', type=float, default=501, help='Determine weight applied to pre-net reconstruction loss')
+    parser.add_argument('--patience', type=float, default=30, help='Determine weight applied to pre-net reconstruction loss')
     parser.add_argument('--ckpt_freq', type=int, default=50000, help='frequency in steps to mark checkpoints')
     parser.add_argument('--spec_freq', type=int, default=10000, help='frequency in steps to print reconstruction illustrations')
     parser.add_argument('--log_step', type=int, default=10)
