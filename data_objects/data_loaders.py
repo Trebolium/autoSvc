@@ -1,9 +1,11 @@
 from torch.utils.data import Dataset
 import numpy as np
-import os, pickle, random, math, yaml, pdb
+import os, pickle, random, math, pdb, sys
+from multiprocessing import Process, Manager
+from torch.utils.data import DataLoader, SubsetRandomSampler
+sys.path.insert(1, '/homes/bdoc3/my_utils')
 from my_os import recursive_file_retrieval
 from my_arrays import fix_feat_length
-from multiprocessing import Process, Manager   
 
 class DampMelWorld(Dataset):
     """Retrieves features from path.
@@ -335,3 +337,59 @@ class VctkFromMeta(Dataset):
     def __len__(self):
         """Return the number of spkrs."""
         return self.num_tokens
+
+
+"Load the primary dataloader"
+def load_primary_dataloader(config, SIE_feats_params, subset_name, SVC_feats_params=None):
+    if config.diff_svc_feats_dir != '':
+       dataset = DampMelWorld(config, SIE_feats_params, SVC_feats_params, os.path.join(config.SIE_feat_dir, subset_name), os.path.join(config.diff_svc_feats_dir, subset_name)) 
+    else:
+        dataset = DampDataset(config, SIE_feats_params['num_feats'], os.path.join(config.SIE_feat_dir, subset_name))
+    loader = DataLoader(dataset, batch_size=config.batch_size, shuffle=True, drop_last=True)
+    pdb.set_trace()
+    return dataset, loader
+
+
+"generate dataloaders for validation"
+def load_val_dataloaders(config, SIE_feats_params, SVC_feats_params=None):
+    config.medley_data_path = '/homes/bdoc3/my_data/spmel_data/medley/singer_chunks_metadata.pkl'
+    config.vocal_data_path = '/homes/bdoc3/my_data/phonDet/spmel_autovc_params_normalized'
+    config.vctk_data_path = '/homes/bdoc3/my_data/spmel_data/medley/all_meta_data.pkl'
+    medleydb = SpecChunksFromPkl(config, SIE_feats_params)
+    vocalset = VocalSetDataset(config, SIE_feats_params)
+    vctk = VctkFromMeta(config)
+    
+    if config.diff_svc_feats_dir != '':
+        damp = DampMelWorld(config, SIE_feats_params, SVC_feats_params, os.path.join(config.SIE_feat_dir, 'val'), os.path.join(config.diff_svc_feats_dir, 'val'))
+    else:
+        damp = DampDataset(config, SIE_feats_params['num_feats'], os.path.join(config.SIE_feat_dir, 'val'))
+    
+    datasets = [medleydb, vocalset, vctk, damp]
+    print('Finished loading the datasets...')
+    # d_idx_list = list(range(len(datasets)))
+    ds_labels = ['medley', 'vocal', 'vctk', 'damp']
+    val_loaders = generate_loaders(datasets, ds_labels)
+    return val_loaders
+
+
+"generate dataloaders from a list of datasets"
+def generate_loaders(config, datasets, ds_labels):
+    ds_ids_train_idxs = []
+    val_loaders = []
+    for i, ds in enumerate(datasets):
+        random.seed(1) # reinstigating this at every iteration ensures the same random numbers are for each dataset
+        current_ds_size = len(ds)
+        "Take a fraction of the datasets as validation subset"
+        d_idx_list = list(range(current_ds_size))
+        if i != 3:
+            train_song_idxs = random.sample(d_idx_list, int(current_ds_size*0.8))
+            ds_ids_train_idxs.append((ds_labels[i], [x[2] for x in ds], train_song_idxs))
+            val_song_idxs = [x for x in d_idx_list if x not in train_song_idxs]
+            val_sampler = SubsetRandomSampler(val_song_idxs)
+            val_loader = DataLoader(ds, batch_size=config.batch_size, sampler=val_sampler, shuffle=False, drop_last=True)
+        else: # dataset is the one used in training (DAMP)
+            val_loader = DataLoader(ds, batch_size=config.batch_size, shuffle=True, drop_last=True)
+        val_loaders.append((ds_labels[i], val_loader))
+    with open('dataset_ids_train_idxs.pkl','wb') as File:
+        pickle.dump(ds_ids_train_idxs, File) # save dataset ids as pkl for potential hindsight analysis
+    return val_loaders 
