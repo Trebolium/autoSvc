@@ -1,5 +1,4 @@
-from si_encoder.params_model import *
-from params_data import *
+from train_params import *
 from scipy.interpolate import interp1d
 from sklearn.metrics import roc_curve
 from torch.nn.utils import clip_grad_norm_

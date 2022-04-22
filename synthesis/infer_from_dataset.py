@@ -31,8 +31,8 @@ autovc_model_saves_dir = '/homes/bdoc3/my_data/autovc_models/autoStc/'
 autovc_model_dir = autovc_model_saves_dir + model_name
 config = pickle.load(open(autovc_model_dir +'/config.pkl','rb'))
 ckpt_iters = inputs.ckpt_iters
-config.which_cuda = inputs.which_cuda
-config.batch_size = 1
+which_cuda = inputs.which_cuda
+batch_size = 1
 config.autovc_ckpt = autovc_model_dir +'/ckpts/ckpt_' +str(ckpt_iters) +'.pth.tar'
 avg_embs = np.load(os.path.dirname(config.emb_ckpt) +'/averaged_embs.npy')
 config.vte_ckpt = inputs.vte_ckpt
@@ -44,7 +44,7 @@ test_names = pickle.load(open(os.path.dirname(config.emb_ckpt) +'/config_params.
 config.exclude_list = []
 male_idx = range(0,11)
 female_idx = range(11,20)
-config.device = torch.device(f'cuda:{config.which_cuda}' if torch.cuda.is_available() else 'cpu')
+config.device = torch.device(f'cuda:{which_cuda}' if torch.cuda.is_available() else 'cpu')
 with open(config.spmel_dir +'/spmel_params.yaml') as File:
     spmel_params = yaml.load(File, Loader=yaml.FullLoader)
 
@@ -114,7 +114,7 @@ for i, metadata in enumerate(metadata_list):
     # synthesize nu shit
     for k, spmel  in enumerate(all_spmels):
         # x_identic_psnt = tensor.squeeze(0).squeeze(0).detach().cpu().numpy()
-        waveform = wavegen(model, config.which_cuda, c=spmel)   
+        waveform = wavegen(model, which_cuda, c=spmel)   
         #     librosa.output.write_wav(name+'.wav', waveform, sr=16000)
 #        if k == 0:
 #            sf.write(subdir_for_wavs +f'/example{counter}_{singer_names[singer_idx]}{style_names[org_style_idx]}_ORG.wav', waveform, samplerate=16000)

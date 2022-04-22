@@ -1,100 +1,161 @@
-from torch.utils.data import Dataset
 import numpy as np
 import os, pickle, random, math, pdb, sys
 from multiprocessing import Process, Manager
-from torch.utils.data import DataLoader, SubsetRandomSampler
-sys.path.insert(1, '/homes/bdoc3/my_utils')
+from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler
+from train_params import *
+from utils import process_uttrs_feats
 from my_os import recursive_file_retrieval
 from my_arrays import fix_feat_length
 
-class DampMelWorld(Dataset):
-    """Retrieves features from path.
-        Saves these in a dataset as a dictionary with singer_ids as they keys,
-        and a list for the value containing tuples (features, utterance_id)"""
-    def __init__(self, config, SIE_feat_params, SVC_feat_params, SIE_feats_dir, svc_feats_dir):
-        self.config = config
-        # melsteps_per_second = SIE_feat_params['sr'] / SIE_feat_params['hop_size']
-                                #mel                            world
-        # pdb.set_trace()
-        self.feats_ratio = SVC_feat_params['frame_dur_ms'] / SIE_feat_params['frame_dur_ms']
-        self.SIE_num_feats = SIE_feat_params['num_feats']
-        self.SIE_crop = math.floor(self.config.autosvc_crop * self.feats_ratio)
-        _, SIE_f_paths = recursive_file_retrieval(SIE_feats_dir) # explicitly given outside config to specify whether train or val subset used here
-        SIE_f_paths = sorted(SIE_f_paths)
-        svc_f_paths = [os.path.join(svc_feats_dir, os.path.basename(f_path).split('_')[0], os.path.basename(f_path)) for f_path in SIE_f_paths]
-        num_songs = -1
+
+"""
+    Retrieves features from 2 directories.
+    Assumes that filename is divided by the _ character into singerID and uttrsID (only relevant for troubleshooting later if necessary)
+    Assumes both feature sets are the same hop-size (durations per frame)
+    Dataset indexed by singerIDs. Each dataset entry contains a list of features related to one singer (the number of uttrs per singer varies)
+    Datsset entries are tuples that include features (array), singerID (str) and uttrsID (str)
+"""
+class DuoFeatureDataset(Dataset):
+
+    def __init__(self, feats1_num_feats, feats1_dir,
+                       feats2_num_feats, feats2_dir):
+        
+        ext = '.npy'
+        _, feats1_fps = recursive_file_retrieval(feats1_dir) # explicitly given outside config to specify whether train or val subset used here
+        cleaned_fps = [fp for fp in sorted(feats1_fps) if fp.endswith(ext) and not fp.startswith('.')]
+        feats2_fps = [os.path.join(feats2_dir, os.path.basename(f_path).split('_')[0], os.path.basename(f_path)) for f_path in cleaned_fps]
+        num_songs = 0
         singer_clips = {}
-        for i, file_path in enumerate(SIE_f_paths):
-            if file_path.endswith('.npy'):
-                singer_id, song_id = os.path.basename(file_path).split('_')[0], os.path.basename(file_path).split('_')[1][:-4]
-                SIE_features = np.load(file_path)
-                SVC_features = np.load(svc_f_paths[i])
-                num_songs += 1
-                if singer_id not in singer_clips.keys():
-                    singer_clips[singer_id] = [(SIE_features, SVC_features, singer_id, song_id)]
-                else:
-                    singer_clips[singer_id].append((SIE_features, SVC_features, singer_id, song_id))
+        for i, file_path in enumerate(cleaned_fps):
+            singer_id, song_id = os.path.basename(file_path).split('_')[0], os.path.basename(file_path).split('_')[1][:-4]
+            feats1_features = np.load(file_path)
+            feats2_features = np.load(feats2_fps[i])
+            num_songs += 1
+            if singer_id not in singer_clips.keys():
+                singer_clips[singer_id] = [(feats1_features, feats2_features, singer_id, song_id)]
+            else:
+                singer_clips[singer_id].append((feats1_features, feats2_features, singer_id, song_id))
         self.dataset = [content for content in singer_clips.values()]
         self.num_songs = num_songs
-        self.num_singers = len(self.dataset)
-
+        self.feats1_num_feats = feats1_num_feats
+        self.feats2_num_feats = feats2_num_feats
 
     def __getitem__(self, index):
         # pick a random speaker
-        utters_meta = self.dataset[index]
-        SIE_features, SVC_features, singer_id, example_id = utters_meta[random.randint(0,len(utters_meta)-1)]
-        adjusted_SVC_feats, SVC_offset = fix_feat_length(SVC_features, self.config.autosvc_crop)
-        SIE_offset = math.floor(SVC_offset * self.feats_ratio)
-        adjusted_SIE_feats, _ = fix_feat_length(SIE_features, self.SIE_crop, SIE_offset)
-        adjusted_SIE_feats = adjusted_SIE_feats[:,:self.SIE_num_feats] # capture only the spectral envelope, ignore the pitch information for now 
-        # print(adjusted_SIE_feats.shape, adjusted_SVC_feats.shape)
-        # if adjusted_SIE_feats.shape[0] != :
-        #     pdb.set_trace()
-        return adjusted_SIE_feats, adjusted_SVC_feats, singer_id, example_id
+        voice_meta = self.dataset[index]
+        # chooses a random uttr here
+        feats1_features, feats2_features, singer_id, example_id = voice_meta[random.randint(0,len(voice_meta)-1)]
+        # crop feats
+        feats1_spec, feats1_pitch = process_uttrs_feats(feats1_features, self.feats1_num_feats)
+        feats2_spec, feats2_pitch = process_uttrs_feats(feats2_features, self.feats2_num_feats)
+
+        if pitch_cond:
+            return (feats1_spec, feats2_spec), (feats1_pitch, feats2_pitch), (singer_id, example_id)
+        else:
+            return (feats1_spec, feats2_spec), (singer_id, example_id)
 
     def __len__(self):
         """Return the number of spkrs."""
-        return self.num_singers
+        return len(self.dataset)
 
-class DampDataset(Dataset):
-    """Retrieves features from path.
-        Saves these in a dataset as a dictionary with singer_ids as they keys,
-        and a list for the value containing tuples (features, utterance_id)"""
-    def __init__(self, config, num_feats, SVC_feat_dir):
-        self.config = config
-        # melsteps_per_second = SIE_feat_params['sr'] / SIE_feat_params['hop_size']
-        # self.window_size = math.ceil(config.chunk_seconds * melsteps_per_second) * config.chunk_num
+
+"""
+    Retrieves features from directory.
+    Assumes that filename is divided by the _ character into singerID and uttrsID (only relevant for troubleshooting later if necessary)
+    Dataset indexed by singerIDs. Each dataset entry contains a list of features related to one singer (the number of uttrs per singer varies)
+    Datsset entries are tuples that include features (array), singerID (str) and uttrsID (str)
+"""
+class SingleFeatureDataset(Dataset):
+
+    def __init__(self, num_feats, feat_dir):
+        
+        ext = '.npy'
+        _, fps = recursive_file_retrieval(feat_dir) # explicitly given outside config to specify whether train or val subset used here
+        cleaned_fps = [fp for fp in sorted(fps) if fp.endswith(ext) and not fp.startswith('.')]
+        num_songs = 0
+        singer_clips = {}
+        for file_path in cleaned_fps:
+            singer_id, song_id = os.path.basename(file_path).split('_')[0], os.path.basename(file_path).split('_')[1][:len(ext)]
+            features = np.load(file_path)
+            num_songs += 1
+            if singer_id not in singer_clips.keys():
+                singer_clips[singer_id] = [(features, singer_id, song_id)]
+            else:
+                singer_clips[singer_id].append((features, singer_id, song_id))
+        # this compression is necessary for instances when some singers have multiple entries and others do not"
+        self.dataset = [content for content in singer_clips.values()]
+        self.num_songs = num_songs
         self.num_feats = num_feats
-        _, file_path_list = recursive_file_retrieval(SVC_feat_dir) # explicitly given outside config to specify whether train or val subset used here
-        file_path_list = sorted(file_path_list)
-        num_songs = -1
-        singer_clips = {}
-        for file_path in file_path_list:
-            if  file_path.endswith('.npy'):
-                singer_id, song_id = os.path.basename(file_path).split('_')[0], os.path.basename(file_path).split('_')[1][:-4]
-                features = np.load(file_path)
-                num_songs += 1
-                if singer_id not in singer_clips.keys():
-                    singer_clips[singer_id] = [(features, singer_id, song_id)]
-                else:
-                    singer_clips[singer_id].append((features, singer_id, song_id))
-        self.dataset = [content for content in singer_clips.values()]
-        self.num_songs = num_songs
-        self.num_singers = len(self.dataset)
 
     def __getitem__(self, index):
-        # pick a random speaker
-        utters_meta = self.dataset[index]
-        features, singer_id, example_id = utters_meta[random.randint(0,len(utters_meta)-1)]
-        features = features[:,:self.num_feats] # capture only the spectral envelope, ignore the pitch information for now 
 
-        """Ensure all featuress are the length of (self.window_size * chunk_num)"""
-        adjusted_length_features, _ = fix_feat_length(features, self.config.autosvc_crop)
-        return adjusted_length_features, singer_id, example_id
+        voice_meta = self.dataset[index]
+        # chooses a random uttr here
+        feats, singer_id, example_id = voice_meta[random.randint(0,len(voice_meta)-1)]
+        # crop feats
+        if pitch_cond:
+            feats_spec, feats_pitch = process_uttrs_feats(feats, self.num_feats)
+            return feats_spec, feats_pitch, (singer_id, example_id)
+        else:
+            feats_spec = process_uttrs_feats(feats, self.num_feats)
+            return feats_spec, (singer_id, example_id)
 
     def __len__(self):
         """Return the number of spkrs."""
-        return self.num_singers
+        return len(self.dataset)
+
+
+"Load the primary dataloader"
+def load_primary_dataloader(SIE_feats_params, subset_name, SVC_feats_params):
+    if SVC_feat_dir == '':
+        dataset = SingleFeatureDataset(SIE_feats_params['num_feats'], os.path.join(SIE_feat_dir, subset_name))
+    else:
+        dataset = DuoFeatureDataset(SIE_feats_params['num_feats'], os.path.join(SIE_feat_dir, subset_name),
+                                    SVC_feats_params['num_feats'], os.path.join(SVC_feat_dir, subset_name))
+    
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+    return dataset, loader
+
+
+"generate dataloaders for validation"
+def load_val_dataloaders(SIE_feats_params, SVC_feats_params):
+    pdb.set_trace()
+    # needs to be fixed - do we really need to use multiple different dataset objects? I doubt it!
+    medleydb = SpecChunksFromPkl(SIE_feats_params)
+    vocalset = VocalSetDataset(SIE_feats_params)
+    vctk = VctkFromMeta()
+    damp = SingleFeatureDataset(SIE_feats_params['num_feats'], os.path.join(SIE_feat_dir, 'val'))
+    
+    datasets = [medleydb, vocalset, vctk, damp]
+    print('Finished loading the datasets...')
+    # d_idx_list = list(range(len(datasets)))
+    ds_labels = ['medley', 'vocal', 'vctk', 'damp']
+    val_loaders = generate_loaders(datasets, ds_labels)
+    return val_loaders
+
+
+"generate dataloaders from a list of datasets"
+def generate_loaders(datasets, ds_labels):
+    ds_ids_train_idxs = []
+    val_loaders = []
+    for i, ds in enumerate(datasets):
+        random.seed(1) # reinstigating this at every iteration ensures the same random numbers are for each dataset
+        current_ds_size = len(ds)
+        "Take a fraction of the datasets as validation subset"
+        d_idx_list = list(range(current_ds_size))
+        if i != 3:
+            train_song_idxs = random.sample(d_idx_list, int(current_ds_size*0.8))
+            ds_ids_train_idxs.append((ds_labels[i], [x[2] for x in ds], train_song_idxs))
+            val_song_idxs = [x for x in d_idx_list if x not in train_song_idxs]
+            val_sampler = SubsetRandomSampler(val_song_idxs)
+            val_loader = DataLoader(ds, batch_size=batch_size, sampler=val_sampler, shuffle=False, drop_last=True)
+        else: # dataset is the one used in training (DAMP)
+            val_loader = DataLoader(ds, batch_size=batch_size, shuffle=True, drop_last=True)
+        val_loaders.append((ds_labels[i], val_loader))
+    with open('dataset_ids_train_idxs.pkl','wb') as File:
+        pickle.dump(ds_ids_train_idxs, File) # save dataset ids as pkl for potential hindsight analysis
+    return val_loaders
+
 
 class SpecChunksFromPkl(Dataset):
     """Dataset class for using a pickle object,
@@ -103,12 +164,12 @@ class SpecChunksFromPkl(Dataset):
     associated labels,
     optional conditioning."""
     # made originally for medleydb pkl
-    def __init__(self, config, SIE_feat_params):
+    def __init__(self, SIE_feat_params):
         """Initialize and preprocess the dataset."""
-        self.config = config
+        
         melsteps_per_second = SIE_feat_params['sr'] / SIE_feat_params['hop_size']
-        self.window_size = math.ceil(config.chunk_seconds * melsteps_per_second) * config.chunk_num
-        metadata = pickle.load(open(config.medley_data_path, 'rb'))
+        self.window_size = math.ceil(chunk_seconds * melsteps_per_second) * chunk_num
+        metadata = pickle.load(open(medley_data_path, 'rb'))
         dataset = []
         song_counter = 0
         previous_filename = metadata[0][0][:-10]
@@ -162,18 +223,15 @@ class VocalSetDataset(Dataset):
     generates random windowed subspec examples,
     associated labels,
     optional conditioning."""
-    def __init__(self, config, SIE_feat_params):
+    def __init__(self, SIE_feat_params):
         """Initialize and preprocess the dataset."""
-        self.config = config
+        
         melsteps_per_second = SIE_feat_params['sr'] / SIE_feat_params['hop_size']
-        self.window_size = math.ceil(config.chunk_seconds * melsteps_per_second) * config.chunk_num
+        self.window_size = math.ceil(chunk_seconds * melsteps_per_second) * chunk_num
         style_names = ['belt','lip_trill','straight','vocal_fry','vibrato','breathy']
         singer_names = ['m1_','m2_','m3_','m4_','m5_','m6_','m7_','m8_','m9_','m10_','m11_','f1_','f2_','f3_','f4_','f5_','f6_','f7_','f8_','f9_']
-#        if len(config.exclude_list) != 0:
-#            for excluded_singer_id in config.exclude_list:
-#                idx = singer_names.index(excluded_singer_id)
-#                singer_names[idx] = 'removed'
-        dir_name, _, fileList = next(os.walk(config.vocal_data_path)) #this has changed from unnormalised to normed
+
+        dir_name, _, fileList = next(os.walk(vocalset_data_path)) #this has changed from unnormalised to normed
         fileList = sorted(fileList)
         dataset = []
         # group dataset by singers
@@ -220,17 +278,16 @@ class VctkFromMeta(Dataset):
     """Dataset class for the Utterances dataset."""
 
     # this object will contain both melspecs and speaker embeddings taken from the train.pkl
-    def __init__(self, config):
+    def __init__(self):
         """Initialize and preprocess the Utterances dataset."""
-        self.config = config
-        self.autosvc_crop = config.autosvc_crop
+        
+        self.autosvc_crop = window_timesteps
         self.step = 10
-        self.file_name = config.file_name
-        # self.one_hot = config.one_hot
+        self.file_name = svc_model_name
 
-        meta_all_data = pickle.load(open(config.vctk_data_path, "rb"))
+        meta_all_data = pickle.load(open(vctk_data_path, "rb"))
         # split into training data
-        num_training_speakers=config.train_size
+        num_training_speakers=train_size
         random.seed(1)
         training_indices =  random.sample(range(0, len(meta_all_data)), num_training_speakers)
         training_set = []
@@ -255,19 +312,18 @@ class VctkFromMeta(Dataset):
             # training_file_names_array = np.asarray(training_file_names)
             # training_file_indices_array = np.asarray(training_file_indices)
             # test_file_indices = np.setdiff1d(np.arange(num_files_in_subdir), training_file_indices_array)
-        meta = training_set
         # training set contains
-        with open(self.config.data_dir +'/' +self.file_name +'/training_meta_data.pkl', 'wb') as train_pack:
+        training_metadata_path = os.path.join(svc_model_dir, svc_model_name,'training_meta_data.pkl')
+        with open(training_metadata_path, 'wb') as train_pack:
             pickle.dump(training_set, train_pack)
 
-        training_info = pickle.load(open(self.config.data_dir +'/' +self.file_name +'/training_meta_data.pkl', 'rb'))
-        num_speakers_seq = np.arange(len(training_info))
+        training_info = pickle.load(open(training_metadata_path, 'rb'))
         # self.one_hot_array = np.eye(len(training_info))[num_speakers_seq]
         self.spkr_id_list = [spkr[0] for spkr in training_info]
 
         """Load data using multiprocessing"""
         manager = Manager()
-        meta = manager.list(meta)
+        meta = manager.list(training_set)
         dataset = manager.list(len(meta)*[None])  
         processes = []
         # uses a different process thread for every self.steps of the meta content
@@ -337,59 +393,3 @@ class VctkFromMeta(Dataset):
     def __len__(self):
         """Return the number of spkrs."""
         return self.num_tokens
-
-
-"Load the primary dataloader"
-def load_primary_dataloader(config, SIE_feats_params, subset_name, SVC_feats_params=None):
-    if config.diff_svc_feats_dir != '':
-       dataset = DampMelWorld(config, SIE_feats_params, SVC_feats_params, os.path.join(config.SIE_feat_dir, subset_name), os.path.join(config.diff_svc_feats_dir, subset_name)) 
-    else:
-        dataset = DampDataset(config, SIE_feats_params['num_feats'], os.path.join(config.SIE_feat_dir, subset_name))
-    loader = DataLoader(dataset, batch_size=config.batch_size, shuffle=True, drop_last=True)
-    pdb.set_trace()
-    return dataset, loader
-
-
-"generate dataloaders for validation"
-def load_val_dataloaders(config, SIE_feats_params, SVC_feats_params=None):
-    config.medley_data_path = '/homes/bdoc3/my_data/spmel_data/medley/singer_chunks_metadata.pkl'
-    config.vocal_data_path = '/homes/bdoc3/my_data/phonDet/spmel_autovc_params_normalized'
-    config.vctk_data_path = '/homes/bdoc3/my_data/spmel_data/medley/all_meta_data.pkl'
-    medleydb = SpecChunksFromPkl(config, SIE_feats_params)
-    vocalset = VocalSetDataset(config, SIE_feats_params)
-    vctk = VctkFromMeta(config)
-    
-    if config.diff_svc_feats_dir != '':
-        damp = DampMelWorld(config, SIE_feats_params, SVC_feats_params, os.path.join(config.SIE_feat_dir, 'val'), os.path.join(config.diff_svc_feats_dir, 'val'))
-    else:
-        damp = DampDataset(config, SIE_feats_params['num_feats'], os.path.join(config.SIE_feat_dir, 'val'))
-    
-    datasets = [medleydb, vocalset, vctk, damp]
-    print('Finished loading the datasets...')
-    # d_idx_list = list(range(len(datasets)))
-    ds_labels = ['medley', 'vocal', 'vctk', 'damp']
-    val_loaders = generate_loaders(datasets, ds_labels)
-    return val_loaders
-
-
-"generate dataloaders from a list of datasets"
-def generate_loaders(config, datasets, ds_labels):
-    ds_ids_train_idxs = []
-    val_loaders = []
-    for i, ds in enumerate(datasets):
-        random.seed(1) # reinstigating this at every iteration ensures the same random numbers are for each dataset
-        current_ds_size = len(ds)
-        "Take a fraction of the datasets as validation subset"
-        d_idx_list = list(range(current_ds_size))
-        if i != 3:
-            train_song_idxs = random.sample(d_idx_list, int(current_ds_size*0.8))
-            ds_ids_train_idxs.append((ds_labels[i], [x[2] for x in ds], train_song_idxs))
-            val_song_idxs = [x for x in d_idx_list if x not in train_song_idxs]
-            val_sampler = SubsetRandomSampler(val_song_idxs)
-            val_loader = DataLoader(ds, batch_size=config.batch_size, sampler=val_sampler, shuffle=False, drop_last=True)
-        else: # dataset is the one used in training (DAMP)
-            val_loader = DataLoader(ds, batch_size=config.batch_size, shuffle=True, drop_last=True)
-        val_loaders.append((ds_labels[i], val_loader))
-    with open('dataset_ids_train_idxs.pkl','wb') as File:
-        pickle.dump(ds_ids_train_idxs, File) # save dataset ids as pkl for potential hindsight analysis
-    return val_loaders 

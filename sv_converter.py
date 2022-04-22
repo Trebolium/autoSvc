@@ -1,5 +1,5 @@
 from model_vc import Generator
-from si_encoder.model import SingerIdEncoder
+from model_sie import SingerIdEncoder
 from collections import OrderedDict
 from torch.utils.tensorboard import SummaryWriter
 import torch
@@ -8,6 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
 from neural.scheduler import EarlyStopping
+from train_params import *
 
 def save_ckpt(model, model_optimizer, loss, iteration, save_path):
     print('Saving model...')
@@ -22,33 +23,36 @@ def save_ckpt(model, model_optimizer, loss, iteration, save_path):
 # SOLVER IS THE MAIN SETUP FOR THE NN ARCHITECTURE. INSIDE SOLVER IS THE GENERATOR (G)
 class AutoSvc(object):
 
-    def __init__(self, data_loader, config, SIE_params, SVC_params=None):
+    def __init__(self, data_loader, SIE_params, SVC_params=None):
         """Initialize configurations.""" 
-        self.config = config
+        
 
-        if self.config.file_name == 'defaultName' or self.config.file_name == 'deletable':
+        if self.svc_model_name == 'defaultName' or self.svc_model_name == 'deletable':
             self.writer = SummaryWriter('runs/tests')
         else:
-            self.writer = SummaryWriter(comment = '_' +self.config.file_name)
+            self.writer = SummaryWriter(comment = '_' +self.svc_model_name)
 
         self.SIE_params = SIE_params
-        if config.diff_svc_feats_dir != '':
+        if SVC_feat_dir == '': # if svc dir isn't established, then its ok to pass it same feats as SIE
+            self.SVC_params = SIE_params
+        else: # if svc dir is stablished, give SVC its own params
             self.SVC_params = SVC_params
+
         self.data_loader = data_loader
 
         # Miscellaneous.
         self.use_cuda = torch.cuda.is_available()
-        self.device = torch.device(f'cuda:{self.config.which_cuda}' if self.use_cuda else 'cpu')
+        self.device = torch.device(f'cuda:{which_cuda}' if self.use_cuda else 'cpu')
         self.loss_device = torch.device("cpu")
 
         # Build the model and tensorboard.
         self.build_model()
-        self.EarlyStopping = EarlyStopping(self.config.patience)
+        self.EarlyStopping = EarlyStopping(patience)
         self.start_time = time.time()
 
     def build_model(self):
 
-        sie_checkpoint = torch.load(os.path.join(self.config.sie_path, 'saved_model.pt'))
+        sie_checkpoint = torch.load(os.path.join(SIE_path, 'saved_model.pt'))
         new_state_dict = OrderedDict()
         sie_num_feats_used = sie_checkpoint['model_state']['lstm.weight_ih_l0'].shape[1]
         sie_num_voices_used = sie_checkpoint['model_state']['class_layer.weight'].shape[0]
@@ -59,25 +63,23 @@ class AutoSvc(object):
         self.sie = SingerIdEncoder(self.device, self.loss_device, sie_num_voices_used, sie_num_feats_used) # don't know why this continues to change
         for param in self.sie.parameters():
             param.requires_grad = False
-        self.sie_optimizer = torch.optim.Adam(self.sie.parameters(), 0.0001)
+        self.sie_optimizer = torch.optim.Adam(self.sie.parameters(), adam_init)
         self.sie.load_state_dict(new_state_dict)
         for state in self.sie_optimizer.state.values():
             for k, v in state.items():
                 if isinstance(v, torch.Tensor):
                     state[k] = v.cuda(self.device)
         self.sie.to(self.device)
-        self.sie.eval()
-
+        self.sie.eval() 
 
         #if feats between SIE and SVC should be different
-        if self.config.diff_svc_feats_dir != '': 
-            self.G = Generator(self.config.dim_neck, self.config.dim_emb, self.config.dim_pre, self.config.freq, self.SVC_params['num_feats'])        
+        if SVC_feat_dir == '': 
+            self.G = Generator(dim_neck, dim_emb, dim_pre, sample_freq, SIE_feat_dim)        
         else:
-            self.G = Generator(self.config.dim_neck, self.config.dim_emb, self.config.dim_pre, self.config.freq, self.SIE_params['num_feats'])        
-        self.g_optimizer = torch.optim.Adam(self.G.parameters(), self.config.adam_init)
-        if self.config.ckpt_weights!='':
-            ckpt_path = os.path.join(self.config.model_dir, self.config.ckpt_weights)
-            g_checkpoint = torch.load(ckpt_path)
+            self.G = Generator(dim_neck, dim_emb, dim_pre, sample_freq, SVC_feat_dim)        
+        self.g_optimizer = torch.optim.Adam(self.G.parameters(), )
+        if svc_ckpt_path!='':
+            g_checkpoint = torch.load(svc_ckpt_path)
             self.G.load_state_dict(g_checkpoint['model_state_dict'])
             self.g_optimizer.load_state_dict(g_checkpoint['optimizer_state_dict'])
             # fixes tensors on different devices error
@@ -114,7 +116,7 @@ class AutoSvc(object):
                 if i > 200:
                     pdb.set_trace()
                 
-                if self.config.diff_svc_feats_dir != '':
+                if self.SVC_feat_dir != '':
                     try:
                         SIE_x, SVC_x, dataset_idx, example_id = next(data_iter)
                     except UnboundLocalError:
@@ -157,11 +159,11 @@ class AutoSvc(object):
                 losses_list[2] += g_loss_cd.item()
 
                 # Print out training information.
-                if i % self.config.log_step == 0 or i == (current_iter + cycle_size):
+                if i % log_step == 0 or i == (current_iter + cycle_size):
                     et = time.time() - self.start_time
                     et = str(datetime.timedelta(seconds=et))[:-7]
                     if mode == 'train':
-                        log = "Elapsed [{}], Mode {}, Iter [{}/{}]".format(et, mode, i, self.config.max_iters)
+                        log = "Elapsed [{}], Mode {}, Iter [{}/{}]".format(et, mode, i, self.max_iters)
                     else: log = "Elapsed [{}], Mode {}".format(et, mode)
                     for tag in keys:
                         log += ", {}: {:.4f}".format(tag, loss[tag])
@@ -170,13 +172,13 @@ class AutoSvc(object):
 
                 if mode == 'train':
 
-                    g_loss = (self.config.prnt_loss_weight * g_loss_id) + (self.config.psnt_loss_weight * g_loss_id_psnt) #+ ((self.config.lambda_cd  * (i / 100000)) * g_loss_cd)
+                    g_loss = (prnt_loss_weight * g_loss_id) + (psnt_loss_weight * g_loss_id_psnt) #+ ((config.lambda_cd  * (i / 100000)) * g_loss_cd)
                     
                     self.reset_grad()
                     g_loss.backward()
                     self.g_optimizer.step()
                     # spec nad freq have to be multiple of cycle_size
-                    if i % self.config.spec_freq == 0:
+                    if i % spec_freq == 0:
                         print('plotting specs')
                         main_x = main_x.cpu().data.numpy()
                         x_identic = x_identic.cpu().data.numpy()
@@ -205,7 +207,7 @@ class AutoSvc(object):
                             name = 'Egs ' +str(example_id[j%2]) +', ds_idx ' +str(dataset_idx[j%2])
                             plt.title(name)
                             plt.colorbar()
-                        plt.savefig(self.config.model_dir +'/' +self.config.file_name +'/image_comparison/' +str(i) +'iterations')
+                        plt.savefig(self.svc_model_dir +'/' +self.svc_model_name +'/image_comparison/' +str(i) +'iterations')
                         plt.close()
         
             return losses_list, (current_iter + cycle_size)
@@ -214,15 +216,15 @@ class AutoSvc(object):
 
         def logs(losses_list, mode, current_iter): 
             if mode[4:]=='vocal':
-                self.writer.add_scalar(f"Loss_id_psnt_{mode[4:]}/{mode[:4]}", losses_list[1]/(cycle_size*self.config.batch_size), current_iter)
+                self.writer.add_scalar(f"Loss_id_psnt_{mode[4:]}/{mode[:4]}", losses_list[1]/(cycle_size*batch_size), current_iter)
             elif mode[4:]=='medley':
-                self.writer.add_scalar(f"Loss_id_psnt_{mode[4:]}/{mode[:4]}", losses_list[1]/(cycle_size*self.config.batch_size), current_iter)
+                self.writer.add_scalar(f"Loss_id_psnt_{mode[4:]}/{mode[:4]}", losses_list[1]/(cycle_size*batch_size), current_iter)
             elif mode[4:]=='vctk':
-                self.writer.add_scalar(f"Loss_id_psnt_{mode[4:]}/{mode[:4]}", losses_list[1]/(cycle_size*self.config.batch_size), current_iter)
+                self.writer.add_scalar(f"Loss_id_psnt_{mode[4:]}/{mode[:4]}", losses_list[1]/(cycle_size*batch_size), current_iter)
             elif mode[4:]=='damp':
-                self.writer.add_scalar(f"Loss_id_psnt_{mode[4:]}/{mode[:4]}", losses_list[1]/(cycle_size*self.config.batch_size), current_iter)
+                self.writer.add_scalar(f"Loss_id_psnt_{mode[4:]}/{mode[:4]}", losses_list[1]/(cycle_size*batch_size), current_iter)
             elif mode=='train':
-                self.writer.add_scalar(f"Loss_id_psnt_{self.config.use_loader}/{mode}", losses_list[1]/(cycle_size*self.config.batch_size), current_iter)
+                self.writer.add_scalar(f"Loss_id_psnt_{use_loader}/{mode}", losses_list[1]/(cycle_size*batch_size), current_iter)
             else: exit(1)
             losses_list = [0.,0.,0.]
             self.writer.flush()
@@ -248,9 +250,9 @@ class AutoSvc(object):
             print(losses_list[1])
             if self.EarlyStopping.check(losses_list[1]):
                 print(f"""Early stopping called at iteration {current_iter}.\n
-                    The lowest loss {self.EarlyStopping.lowest_loss} has not decreased since {self.config.patience} iterations.\n
+                    The lowest loss {self.EarlyStopping.lowest_loss} has not decreased since {patience} iterations.\n
                     Saving model...""")
-                save_path = self.config.model_dir +'/' +self.config.file_name +'/ckpts/' +'ckpt_' +str(current_iter) +'.pth.tar'
+                save_path = self.svc_model_dir +'/' +self.svc_model_name +'/ckpts/' +'ckpt_' +str(current_iter) +'.pth.tar'
                 save_ckpt(self.G, self.g_optimizer, losses_list, current_iter, save_path)
                 exit(0)
 

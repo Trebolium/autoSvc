@@ -1,11 +1,13 @@
 import os, shutil, yaml, torch, pickle
 from shutil import copyfile
-from si_encoder.model import SingerIdEncoder
+from model_sie import SingerIdEncoder
 from collections import OrderedDict
-
+from train_params import *
+from my_arrays import fix_feat_length
+from my_audio.pitch import midi_as_onehot
 
 def setup_sie(config):
-    sie_checkpoint = torch.load(os.path.join(config.sie_path, 'saved_model.pt'))
+    sie_checkpoint = torch.load(os.path.join(SIE_path, 'saved_model.pt'))
     new_state_dict = OrderedDict()
     sie_num_feats_used = sie_checkpoint['model_state']['lstm.weight_ih_l0'].shape[1]
     sie_num_voices_used = sie_checkpoint['model_state']['class_layer.weight'].shape[0]
@@ -26,7 +28,7 @@ def setup_sie(config):
 
 
 def setup_gen(config, Generator, num_feats):
-    G = Generator(config.dim_neck, config.dim_emb, config.dim_pre, config.freq, num_feats)
+    G = Generator(dim_neck, dim_emb, dim_pre, sample_freq, num_feats)
     g_optimizer = torch.optim.Adam(G.parameters(), config.adam_init)
     g_checkpoint = torch.load(config.autovc_ckpt, map_location='cpu')
     G.load_state_dict(g_checkpoint['model_state_dict'])
@@ -36,7 +38,7 @@ def setup_gen(config, Generator, num_feats):
     for state in g_optimizer.state.values():
         for k, v in state.items():
             if isinstance(v, torch.Tensor):
-                state[k] = v.cuda(config.which_cuda)
+                state[k] = v.cuda(which_cuda)
     G.to(config.device)
     return G
 
@@ -66,47 +68,56 @@ def new_song_idx(dataset):
 
 
 "Setup and populate new directory for model"
-def new_dir_setup(config):
-    model_dir_path = os.path.join(config.model_dir, config.file_name)
+def new_dir_setup():
+    model_dir_path = os.path.join(svc_model_dir, svc_model_name)
     overwrite_dir(model_dir_path)
     os.makedirs(model_dir_path +'/ckpts')
     os.makedirs(model_dir_path +'/generated_wavs')
     os.makedirs(model_dir_path +'/image_comparison')
-    # save config in multiple formats (choose suitable one later)
-    config_dict = {attr: getattr(config, attr) for attr in dir(config) if not attr.startswith('_')}
-    with open(model_dir_path +'/config.pkl', 'wb') as config_file:
-        pickle.dump(config, config_file)
-    with open(model_dir_path +'/config.yaml', 'w') as config_file:
-        yaml.dump(config_dict, config_file, default_flow_style=False)
-    # open(model_dir_path +'/config.txt', 'a').write(str(config))
-    copyfile(config.feature_dir +'/feat_params.yaml', (model_dir_path +'/feat_params.py'))
     copyfile('./model_vc.py',(model_dir_path +'/this_model_vc.py'))
     copyfile('./sv_converter.py',(model_dir_path +'/sv_converter.py'))
     copyfile('./main.py',(model_dir_path +'/main.py'))
-
-
-"Replace config values with those of previous config file"
-def use_prev_config_vals(config):
-    max_iters = config.max_iters
-    file_name = config.file_name
-    autovc_ckpt = config.autovc_ckpt
-    sie_path = config.sie_path
-    ckpt_weights = config.ckpt_weights
-    ckpt_freq = config.ckpt_freq
-    config = pickle.load(open(os.path.join(config.model_dir, config.ckpt_weights, 'config.pkl'), 'rb'))
-    config.ckpt_weights = ckpt_weights
-    config.max_iters = max_iters
-    config.file_name = file_name
-    config.autovc_ckpt = autovc_ckpt
-    config.sie_path = sie_path
-    config.ckpt_freq = ckpt_freq
+    copyfile('./train_params.py',(model_dir_path +'/train_params.py'))
 
 
 "Process config object, reassigns values if necessary, raise exceptions"
-def process_config(config):
-    if (config.ckpt_weights != '') and (config.use_ckpt_config == True): # if using pretrained weights
-        use_prev_config_vals(config)
-    if config.file_name == config.ckpt_weights:
-        raise Exception("Your file name and ckpt_weights name can't be the same")
-    if not config.ckpt_freq%int(config.train_iter*0.2) == 0 or not config.ckpt_freq%int(config.train_iter*0.2) == 0:
-        raise Exception(f"ckpt_freq {config.ckpt_freq} and spec_freq {config.spec_freq} need to be a multiple of val_iter {int(config.train_iter*0.2)}")
+def process_config():
+    if svc_model_name == svc_ckpt_path:
+        raise Exception("Your file name and svc_ckpt_path name can't be the same")
+    if not ckpt_freq%int(train_iter*0.2) == 0 or not ckpt_freq%int(train_iter*0.2) == 0:
+        raise Exception(f"ckpt_freq {ckpt_freq} and spec_freq {spec_freq} need to be a multiple of val_iter {int(train_iter*0.2)}")
+
+
+# check use_aper_feats boolean to produce total num feats being used for training
+def determine_dim_size(SIE_params, SVC_params):
+
+    if use_aper_feats:
+
+        if 'world' in SIE_feat_dir: # requires no else a mel feature set means leave num_feats as is
+            SIE_params['num_feats'] = SIE_params['num_harm_feats'] + SIE_params['num_aper_feats']
+        if 'world' in SVC_feat_dir:
+            SVC_params['num_feats'] = SVC_params['num_harm_feats'] + SVC_params['num_aper_feats']
+
+    else:
+        if 'world' in SIE_feat_dir:
+            SIE_params['num_feats'] = SIE_params['num_harm_feats']
+        if 'world' in SVC_feat_dir:
+            SVC_params['num_feats'] = SVC_params['num_harm_feats']
+
+    return SIE_params, SVC_params
+
+
+# takes input features and extracts cropped spectral and midi info
+def process_uttrs_feats(features, num_spec_feats):
+    cropped_feats, feats_offset = fix_feat_length(features, window_timesteps)
+    spectral_feats = cropped_feats[:,:num_spec_feats]
+
+    if pitch_cond:
+        midi_contour = cropped_feats[:,-2]
+        unvoiced = cropped_feats[:,-1].astype(int) == 1
+        midi_contour[unvoiced] = 0
+        onehot_midi = midi_as_onehot(midi_contour, midi_range)
+        return spectral_feats, onehot_midi
+        
+    else:
+        return spectral_feats
