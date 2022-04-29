@@ -1,12 +1,13 @@
+from distutils.command.clean import clean
 import numpy as np
 import os, pickle, random, math, pdb, sys
 from multiprocessing import Process, Manager
 from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler
 from train_params import *
-from utils import process_uttrs_feats
 from my_os import recursive_file_retrieval
+from my_audio.pitch import midi_as_onehot
 from my_arrays import fix_feat_length
-
+from my_normalise import norm_feat_arr
 
 """
     Retrieves features from 2 directories.
@@ -17,42 +18,90 @@ from my_arrays import fix_feat_length
 """
 class DuoFeatureDataset(Dataset):
 
-    def __init__(self, feats1_num_feats, feats1_dir,
-                       feats2_num_feats, feats2_dir):
+    def __init__(self, feats1_num_feats,
+                       feats2_num_feats,
+                       subset_name): 
+
+        self.ext = '.npy'
+        feats1_subset_dir = os.path.join(SIE_feat_dir, subset_name)
+        _, feats1_fps = recursive_file_retrieval(feats1_subset_dir) # explicitly given outside config to specify whether train or val subset used here
+        numpy_fns = [os.path.basename(fp) for fp in sorted(feats1_fps) if fp.endswith(self.ext) and not fp.startswith('.')]
         
-        ext = '.npy'
-        _, feats1_fps = recursive_file_retrieval(feats1_dir) # explicitly given outside config to specify whether train or val subset used here
-        cleaned_fps = [fp for fp in sorted(feats1_fps) if fp.endswith(ext) and not fp.startswith('.')]
-        feats2_fps = [os.path.join(feats2_dir, os.path.basename(f_path).split('_')[0], os.path.basename(f_path)) for f_path in cleaned_fps]
+        feats2_fps = []
         num_songs = 0
         singer_clips = {}
-        for i, file_path in enumerate(cleaned_fps):
-            singer_id, song_id = os.path.basename(file_path).split('_')[0], os.path.basename(file_path).split('_')[1][:-4]
-            feats1_features = np.load(file_path)
-            feats2_features = np.load(feats2_fps[i])
-            num_songs += 1
+        for fn in numpy_fns:
+            # get path components
+            singer_id, _ = fn.split('_')[0], fn.split('_')[1]
+
             if singer_id not in singer_clips.keys():
-                singer_clips[singer_id] = [(feats1_features, feats2_features, singer_id, song_id)]
+                singer_clips[singer_id] = [fn]
             else:
-                singer_clips[singer_id].append((feats1_features, feats2_features, singer_id, song_id))
+                singer_clips[singer_id].append(fn)
+
+            num_songs += 1
+
         self.dataset = [content for content in singer_clips.values()]
         self.num_songs = num_songs
         self.feats1_num_feats = feats1_num_feats
         self.feats2_num_feats = feats2_num_feats
+        self.subset_name = subset_name
 
     def __getitem__(self, index):
         # pick a random speaker
-        voice_meta = self.dataset[index]
+        fns = self.dataset[index]
+        fn = random.choice(fns)
+        singer_id = fn.split('_')[0]
+
+        # generate feats2 corresponding path for filename
+        feats1_fp = os.path.join(SIE_feat_dir, self.subset_name, singer_id, fn)
+        feats2_fp = os.path.join(SVC_feat_dir, self.subset_name, singer_id, fn)
+        # generate feats
+        feats1_features = np.load(feats1_fp)
+        feats2_features = np.load(feats2_fp)
+
         # chooses a random uttr here
-        feats1_features, feats2_features, singer_id, example_id = voice_meta[random.randint(0,len(voice_meta)-1)]
+        feats1_spec, feats2_spec = feats1_features[:,:self.feats1_num_feats], feats2_features[:,:self.feats2_num_feats]
         # crop feats
-        feats1_spec, feats1_pitch = process_uttrs_feats(feats1_features, self.feats1_num_feats)
-        feats2_spec, feats2_pitch = process_uttrs_feats(feats2_features, self.feats2_num_feats)
+        feats1_spec, feat1_offset = fix_feat_length(feats1_spec, window_timesteps)
+        feats2_spec, _ = fix_feat_length(feats2_spec, window_timesteps, feat1_offset)
+        
+        feats1_spec = norm_feat_arr(feats1_spec)
+        feats2_spec = norm_feat_arr(feats2_spec)
+
+        # feats2_spec = feats2_spec[:,feat1_offset:(feat1_offset+window_timesteps)]
 
         if pitch_cond:
-            return (feats1_spec, feats2_spec), (feats1_pitch, feats2_pitch), (singer_id, example_id)
+            
+            # find corresponding file from pitch dir and return pitch_predictions
+            if os.path.exists(target_file):
+                pitch_pred = np.load(target_file)[:,-2:]
+            else:
+                target_file = os.path.join(pitch_dir, 'val', singer_id, fn)
+                if os.path.exists(target_file):
+                    pitch_pred = np.load(target_file)[:,-2:]
+                else:
+                    raise FileNotFoundError(f'Target file {fn} could not be found in pitch directory {pitch_dir}')
+            
+            midi_contour = pitch_pred[:,0]
+            # remove the interpretted values generated because of unvoiced sections
+            unvoiced = pitch_pred[:,1].astype(int) == 1
+            midi_contour[unvoiced] = 0
+            try:
+                onehot_midi = midi_as_onehot(midi_contour, midi_range)
+                # cut to same snipplet as spec_feat examples
+                onehot_midi = onehot_midi[:,feat1_offset:(feat1_offset+window_timesteps)]
+            except AssertionError as e:
+                pdb.set_trace()
+        
+            print(onehot_midi.shape)
         else:
-            return (feats1_spec, feats2_spec), (singer_id, example_id)
+            onehot_midi = np.zeros((0))
+
+        assert feats1_spec.shape == feats2_spec.shape # features must have same dims/shape for stack
+        feats_spec = np.stack([feats1_spec, feats2_spec])
+        return feats_spec, onehot_midi, fn
+
 
     def __len__(self):
         """Return the number of spkrs."""
@@ -65,61 +114,59 @@ class DuoFeatureDataset(Dataset):
     Dataset indexed by singerIDs. Each dataset entry contains a list of features related to one singer (the number of uttrs per singer varies)
     Datsset entries are tuples that include features (array), singerID (str) and uttrsID (str)
 """
-class SingleFeatureDataset(Dataset):
+# class SingleFeatureDataset(Dataset):
 
-    def __init__(self, num_feats, feat_dir):
+#     def __init__(self, num_feats, feat_dir):
         
-        ext = '.npy'
-        _, fps = recursive_file_retrieval(feat_dir) # explicitly given outside config to specify whether train or val subset used here
-        cleaned_fps = [fp for fp in sorted(fps) if fp.endswith(ext) and not fp.startswith('.')]
-        num_songs = 0
-        singer_clips = {}
-        for file_path in cleaned_fps:
-            singer_id, song_id = os.path.basename(file_path).split('_')[0], os.path.basename(file_path).split('_')[1][:len(ext)]
-            features = np.load(file_path)
-            num_songs += 1
-            if singer_id not in singer_clips.keys():
-                singer_clips[singer_id] = [(features, singer_id, song_id)]
-            else:
-                singer_clips[singer_id].append((features, singer_id, song_id))
-        # this compression is necessary for instances when some singers have multiple entries and others do not"
-        self.dataset = [content for content in singer_clips.values()]
-        self.num_songs = num_songs
-        self.num_feats = num_feats
+#         ext = '.npy'
+#         _, fps = recursive_file_retrieval(feat_dir) # explicitly given outside config to specify whether train or val subset used here
+#         cleaned_fps = [fp for fp in sorted(fps) if fp.endswith(ext) and not fp.startswith('.')]
+#         num_songs = 0
+#         singer_clips = {}
+#         for file_path in cleaned_fps:
+#             singer_id, uttrs_id = os.path.basename(file_path).split('_')[0], os.path.basename(file_path).split('_')[1][:len(ext)]
+#             features = np.load(file_path)
+#             num_songs += 1
+#             if singer_id not in singer_clips.keys():
+#                 singer_clips[singer_id] = [(features, singer_id, uttrs_id)]
+#             else:
+#                 singer_clips[singer_id].append((features, singer_id, uttrs_id))
+#         # this compression is necessary for instances when some singers have multiple entries and others do not"
+#         self.dataset = [content for content in singer_clips.values()]
+#         self.num_songs = num_songs
+#         self.num_feats = num_feats
 
-    def __getitem__(self, index):
+#     def __getitem__(self, index):
 
-        voice_meta = self.dataset[index]
-        # chooses a random uttr here
-        feats, singer_id, example_id = voice_meta[random.randint(0,len(voice_meta)-1)]
-        # crop feats
-        if pitch_cond:
-            feats_spec, feats_pitch = process_uttrs_feats(feats, self.num_feats)
-            return feats_spec, feats_pitch, (singer_id, example_id)
-        else:
-            feats_spec = process_uttrs_feats(feats, self.num_feats)
-            return feats_spec, (singer_id, example_id)
+#         voice_meta = self.dataset[index]
+#         # chooses a random uttr here
+#         feats, singer_id, example_id = voice_meta[random.randint(0,len(voice_meta)-1)]
+#         # crop feats
+#         if pitch_cond:
+#             feats_spec, feats_pitch = process_uttrs_feats(feats, self.num_feats)
+#             return feats_spec, feats_pitch, (singer_id, example_id)
+#         else:
+#             feats_spec = process_uttrs_feats(feats, self.num_feats)
+#             return feats_spec, (singer_id, example_id)
 
-    def __len__(self):
-        """Return the number of spkrs."""
-        return len(self.dataset)
+#     def __len__(self):
+#         """Return the number of spkrs."""
+#         return len(self.dataset)
 
 
 "Load the primary dataloader"
 def load_primary_dataloader(SIE_feats_params, subset_name, SVC_feats_params):
     if SVC_feat_dir == '':
-        dataset = SingleFeatureDataset(SIE_feats_params['num_feats'], os.path.join(SIE_feat_dir, subset_name))
+        dataset = SingleFeatureDataset(SIE_feats_params['num_feats'], subset_name)
     else:
-        dataset = DuoFeatureDataset(SIE_feats_params['num_feats'], os.path.join(SIE_feat_dir, subset_name),
-                                    SVC_feats_params['num_feats'], os.path.join(SVC_feat_dir, subset_name))
+        dataset = DuoFeatureDataset(SIE_feats_params['num_feats'], SVC_feats_params['num_feats'], subset_name)
     
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True, num_workers=num_workers)
     return dataset, loader
 
 
 "generate dataloaders for validation"
 def load_val_dataloaders(SIE_feats_params, SVC_feats_params):
-    pdb.set_trace()
     # needs to be fixed - do we really need to use multiple different dataset objects? I doubt it!
     medleydb = SpecChunksFromPkl(SIE_feats_params)
     vocalset = VocalSetDataset(SIE_feats_params)
@@ -144,10 +191,10 @@ def generate_loaders(datasets, ds_labels):
         "Take a fraction of the datasets as validation subset"
         d_idx_list = list(range(current_ds_size))
         if i != 3:
-            train_song_idxs = random.sample(d_idx_list, int(current_ds_size*0.8))
-            ds_ids_train_idxs.append((ds_labels[i], [x[2] for x in ds], train_song_idxs))
-            val_song_idxs = [x for x in d_idx_list if x not in train_song_idxs]
-            val_sampler = SubsetRandomSampler(val_song_idxs)
+            train_uttrs_idxs = random.sample(d_idx_list, int(current_ds_size*0.8))
+            ds_ids_train_idxs.append((ds_labels[i], [x[2] for x in ds], train_uttrs_idxs))
+            val_uttrs_idxs = [x for x in d_idx_list if x not in train_uttrs_idxs]
+            val_sampler = SubsetRandomSampler(val_uttrs_idxs)
             val_loader = DataLoader(ds, batch_size=batch_size, sampler=val_sampler, shuffle=False, drop_last=True)
         else: # dataset is the one used in training (DAMP)
             val_loader = DataLoader(ds, batch_size=batch_size, shuffle=True, drop_last=True)
@@ -342,7 +389,6 @@ class VctkFromMeta(Dataset):
     def load_data(self, submeta, dataset, idx_offset):  
         for k, sbmt in enumerate(submeta):    
             uttrs = len(sbmt)*[None]
-            # pdb.set_trace()
             for j, tmp in enumerate(sbmt):
                 if j < 2:  # fill in speaker id and embedding
                     uttrs[j] = tmp
@@ -358,7 +404,6 @@ class VctkFromMeta(Dataset):
         dataset = self.train_dataset 
         # list_uttrs is literally a list of utterance from a single speaker
         list_uttrs = dataset[index]
-        # pdb.set_trace()
         emb_org = list_uttrs[1]
         speaker_name = list_uttrs[0]
         # pick random uttr with random crop

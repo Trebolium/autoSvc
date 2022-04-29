@@ -6,6 +6,7 @@ SIE_feat_dir = '/homes/bdoc3/my_data/world_vocoder_data/m4a2worldChandna'
 # fill this out only if you want SVC input features to be different to SIE input features
 SVC_feat_dir = '/homes/bdoc3/my_data/world_vocoder_data/m4a2worldChandna'
 use_loader = 'vocal'
+pitch_dir = '/homes/bdoc3/my_data/world_vocoder_data/m4a2worldChandna'
 
 # evaluation feature paths
 medley_data_path = '/homes/bdoc3/my_data/spmel_data/medley/singer_chunks_metadata.pkl'
@@ -13,7 +14,7 @@ vocalset_data_path = '/homes/bdoc3/my_data/phonDet/spmel_autovc_params_normalize
 vctk_data_path = '/homes/bdoc3/my_data/spmel_data/medley/all_meta_data.pkl'
 
 # Singer identity encoder
-SIE_path = '/homes/bdoc3/singer-identity-encoder/encoder/saved_models/dampInton500Voices_chandnaProcessing_unnormed_ge2e'
+SIE_path = '/homes/bdoc3/my_data/autovc_models/singer_identity_encoder/damp_wav2worldChandnaFeats'
 
 # autoSvc init
 which_cuda = 0
@@ -24,8 +25,9 @@ sample_freq = 16
 dim_emb = 256
 dim_neck = 32
 dim_pre = 512
-pitch_cond = False
+pitch_cond = True
 use_ckpt_config = False
+num_workers = 0
 
 # autoSvc training
 eval_all = False
@@ -39,6 +41,7 @@ chunk_seconds = 0.5
 window_timesteps = 192
 use_aper_feats = False
 midi_range = range(0, 100)
+norm_method = None
 
 # schedulers
 ckpt_freq = 50000

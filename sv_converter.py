@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import torch.nn.functional as F
 from neural.scheduler import EarlyStopping
 from train_params import *
+from my_plot import save_array_img
 
 def save_ckpt(model, model_optimizer, loss, iteration, save_path):
     print('Saving model...')
@@ -23,14 +24,13 @@ def save_ckpt(model, model_optimizer, loss, iteration, save_path):
 # SOLVER IS THE MAIN SETUP FOR THE NN ARCHITECTURE. INSIDE SOLVER IS THE GENERATOR (G)
 class AutoSvc(object):
 
-    def __init__(self, data_loader, SIE_params, SVC_params=None):
+    def __init__(self, data_loader, SIE_params, SVC_params):
         """Initialize configurations.""" 
         
-
-        if self.svc_model_name == 'defaultName' or self.svc_model_name == 'deletable':
+        if svc_model_name == 'defaultName' or svc_model_name == 'deletable':
             self.writer = SummaryWriter('runs/tests')
         else:
-            self.writer = SummaryWriter(comment = '_' +self.svc_model_name)
+            self.writer = SummaryWriter(comment = '_' +svc_model_name)
 
         self.SIE_params = SIE_params
         if SVC_feat_dir == '': # if svc dir isn't established, then its ok to pass it same feats as SIE
@@ -73,10 +73,7 @@ class AutoSvc(object):
         self.sie.eval() 
 
         #if feats between SIE and SVC should be different
-        if SVC_feat_dir == '': 
-            self.G = Generator(dim_neck, dim_emb, dim_pre, sample_freq, SIE_feat_dim)        
-        else:
-            self.G = Generator(dim_neck, dim_emb, dim_pre, sample_freq, SVC_feat_dim)        
+        self.G = Generator(dim_neck, dim_emb, dim_pre, sample_freq, self.SVC_params['num_feats'])        
         self.g_optimizer = torch.optim.Adam(self.G.parameters(), )
         if svc_ckpt_path!='':
             g_checkpoint = torch.load(svc_ckpt_path)
@@ -94,6 +91,20 @@ class AutoSvc(object):
             self.current_iter = 0
         self.G.to(self.device)
 
+    def save_by_val_loss(self, current_loss):
+
+        # Overwrite the latest version of the model whenever validation's ge2e loss is lower than previously
+        if current_loss < self.prev_lowest_val_loss: 
+            torch.save(
+                {
+                "step": self.train_current_step,
+                "ge2e_loss": current_loss,
+                "model_state": self.model.state_dict(),
+                "optimizer_state": self.optimizer.state_dict(),
+                },
+                os.path.join(svc_model_dir, svc_model_name, 'saved_model.pt'))
+            self.prev_lowest_val_loss = current_loss
+            return True
 
     def get_current_iters(self):
         return self.current_iter
@@ -111,41 +122,42 @@ class AutoSvc(object):
 
         def batch_iterate():
     
-            for i in range(current_iter+1, (current_iter+1 + cycle_size)):
-
-                if i > 200:
-                    pdb.set_trace()
+            for i in range(current_iter+1, (current_iter+1 + cycle_size)):          
                 
-                if self.SVC_feat_dir != '':
-                    try:
-                        SIE_x, SVC_x, dataset_idx, example_id = next(data_iter)
-                    except UnboundLocalError:
-                        data_iter = iter(data_loader)
-                        SIE_x, SVC_x, dataset_idx, example_id = next(data_iter)
-                    except RuntimeError:
-                        pdb.set_trace()
-                    SVC_x = SVC_x.to(self.device).float()
-                    SIE_x = SIE_x.to(self.device).float() 
-                    emb_org, _ = self.sie(SIE_x)
-                    x_identic, x_identic_psnt, code_real, _, _ = self.G(SVC_x, emb_org, emb_org)
-                    main_x = SVC_x
+                try:
+                    specs_x, pitch_x, example_id = next(data_iter)
+                except UnboundLocalError:
+                    data_iter = iter(data_loader)
+                    specs_x, pitch_x, example_id = next(data_iter)
+                except RuntimeError:
+                    pdb.set_trace()
 
+                if SVC_feat_dir != '':
+                    SIE_specs = specs_x[:,0].to(self.device).float()
+                    SVC_specs = specs_x[:,1].to(self.device).float()
                 else:
-                    try:
-                        main_x, dataset_idx, example_id = next(data_iter)
-                    except:
-                        data_iter = iter(data_loader)
-                        main_x, dataset_idx, example_id = next(data_iter)
-                    main_x = main_x.to(self.device).float() 
-                    emb_org, _ = self.sie(main_x)                
-                    x_identic, x_identic_psnt, code_real, _, _ = self.G(main_x, emb_org, emb_org)
+                    SIE_specs = specs_x[0].to(self.device).float()
+
+                if True:
+                    ex_path = os.path.join(svc_model_dir, svc_model_name, 'input_tensor_plots', f'step {step}')
+                    save_array_img(np.rot90(SIE_specs), ex_path)
+
+                if pitch_cond:
+                    # SIE_pitch = pitch_x[0].to(self.device).float()
+                    SVC_pitch = pitch_x.to(self.device).float()
+                    SVC_input = np.concatenate(SVC_specs, SVC_pitch, axis =1)
+                else:
+                    SVC_input = SVC_specs
+
+                emb_org, _ = self.sie(SIE_specs)
+                x_identic, x_identic_psnt, code_real, _, _ = self.G(SVC_input, emb_org, emb_org)
                 
                 residual_from_psnt = x_identic_psnt - x_identic
                 x_identic = x_identic.squeeze(1)
                 x_identic_psnt = x_identic_psnt.squeeze(1)
                 residual_from_psnt = residual_from_psnt.squeeze(1)
-                g_loss_id = F.l1_loss(main_x, x_identic)   
-                g_loss_id_psnt = F.l1_loss(main_x, x_identic_psnt)   
+                g_loss_id = F.l1_loss(SVC_specs, x_identic)   
+                g_loss_id_psnt = F.l1_loss(SVC_specs, x_identic_psnt)   
                 code_reconst = self.G(x_identic_psnt, emb_org, None)
                 g_loss_cd = F.l1_loss(code_real, code_reconst)
 
@@ -158,12 +170,14 @@ class AutoSvc(object):
                 losses_list[1] += g_loss_id_psnt.item()
                 losses_list[2] += g_loss_cd.item()
 
+
+
                 # Print out training information.
                 if i % log_step == 0 or i == (current_iter + cycle_size):
                     et = time.time() - self.start_time
                     et = str(datetime.timedelta(seconds=et))[:-7]
                     if mode == 'train':
-                        log = "Elapsed [{}], Mode {}, Iter [{}/{}]".format(et, mode, i, self.max_iters)
+                        log = "Elapsed [{}], Mode {}, Iter [{}/{}]".format(et, mode, i, max_iters)
                     else: log = "Elapsed [{}], Mode {}".format(et, mode)
                     for tag in keys:
                         log += ", {}: {:.4f}".format(tag, loss[tag])
@@ -180,12 +194,12 @@ class AutoSvc(object):
                     # spec nad freq have to be multiple of cycle_size
                     if i % spec_freq == 0:
                         print('plotting specs')
-                        main_x = main_x.cpu().data.numpy()
+                        SVC_specs = SVC_specs.cpu().data.numpy()
                         x_identic = x_identic.cpu().data.numpy()
                         x_identic_psnt = x_identic_psnt.cpu().data.numpy()
                         residual_from_psnt = residual_from_psnt.cpu().data.numpy()
                         specs_list = []
-                        for arr in main_x:
+                        for arr in SVC_specs:
                             specs_list.append(arr)
                         for arr in x_identic:
                             specs_list.append(arr)
@@ -204,12 +218,21 @@ class AutoSvc(object):
                                 spec = spec - np.min(spec)
                                 plt.clim(0,1)
                             plt.imshow(spec)
-                            name = 'Egs ' +str(example_id[j%2]) +', ds_idx ' +str(dataset_idx[j%2])
+                            name = 'Egs ' +str(example_id[j%2])
                             plt.title(name)
                             plt.colorbar()
-                        plt.savefig(self.svc_model_dir +'/' +self.svc_model_name +'/image_comparison/' +str(i) +'iterations')
+                        plt.savefig(os.path.join(svc_model_dir, svc_model_name, '/image_comparison/',  str(i) +'iterations'))
                         plt.close()
-        
+
+                elif mode.startswith('val'): # because this string is extended to represent tthe different training sets if evall_all is chosen
+                    if self.save_by_val_loss(g_loss):
+                        print(f"Saved model (step {self.train_current_step}) at time {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))}")
+                    # if EarlyStopping, stop training entirely
+                    if self.EarlyStopping.check(g_loss): 
+                        print(f'Early stopping employed.')
+                        self.closeWriter()
+                        exit(0)
+
             return losses_list, (current_iter + cycle_size)
 
 #=====================================================================================================================================#
@@ -252,8 +275,8 @@ class AutoSvc(object):
                 print(f"""Early stopping called at iteration {current_iter}.\n
                     The lowest loss {self.EarlyStopping.lowest_loss} has not decreased since {patience} iterations.\n
                     Saving model...""")
-                save_path = self.svc_model_dir +'/' +self.svc_model_name +'/ckpts/' +'ckpt_' +str(current_iter) +'.pth.tar'
+                save_path = svc_model_dir +'/' +svc_model_name +'/ckpts/' +'ckpt_' +str(current_iter) +'.pth.tar'
                 save_ckpt(self.G, self.g_optimizer, losses_list, current_iter, save_path)
                 exit(0)
 
-        return current_iter, log_list   
+        return current_iter, log_list 

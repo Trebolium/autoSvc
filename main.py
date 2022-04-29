@@ -1,10 +1,10 @@
 import os, pickle, random, argparse, yaml, sys, pdb
 from torch.backends import cudnn
+sys.path.insert(1, '/homes/bdoc3/my_utils') # only need to do this once in the main script
 from sv_converter import AutoSvc
 from train_params import *
 from data_objects.data_loaders import load_primary_dataloader, load_val_dataloaders
-sys.path.insert(1, '/homes/bdoc3/my_utils') # only need to do this once in the main script
-from utils import str2bool, new_dir_setup, determine_dim_size
+from utils import new_dir_setup, determine_dim_size
 
 
 if __name__ == '__main__':
@@ -12,7 +12,6 @@ if __name__ == '__main__':
 
     cudnn.benchmark = True # For fast training.
     random.seed(1)
-    
     # collects relevant feat params and create 'num_feats' parameter for each
     with open(os.path.join(SIE_feat_dir, 'feat_params.yaml')) as File:
         SIE_feats_params = yaml.load(File, Loader=yaml.FullLoader)

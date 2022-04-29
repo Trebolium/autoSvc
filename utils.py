@@ -3,8 +3,8 @@ from shutil import copyfile
 from model_sie import SingerIdEncoder
 from collections import OrderedDict
 from train_params import *
-from my_arrays import fix_feat_length
-from my_audio.pitch import midi_as_onehot
+import numpy as np
+import matplotlib.pyplot as plt
 
 def setup_sie(config):
     sie_checkpoint = torch.load(os.path.join(SIE_path, 'saved_model.pt'))
@@ -74,6 +74,7 @@ def new_dir_setup():
     os.makedirs(model_dir_path +'/ckpts')
     os.makedirs(model_dir_path +'/generated_wavs')
     os.makedirs(model_dir_path +'/image_comparison')
+    os.makedirs(model_dir_path +'/input_tensor_plots')
     copyfile('./model_vc.py',(model_dir_path +'/this_model_vc.py'))
     copyfile('./sv_converter.py',(model_dir_path +'/sv_converter.py'))
     copyfile('./main.py',(model_dir_path +'/main.py'))
@@ -106,18 +107,3 @@ def determine_dim_size(SIE_params, SVC_params):
 
     return SIE_params, SVC_params
 
-
-# takes input features and extracts cropped spectral and midi info
-def process_uttrs_feats(features, num_spec_feats):
-    cropped_feats, feats_offset = fix_feat_length(features, window_timesteps)
-    spectral_feats = cropped_feats[:,:num_spec_feats]
-
-    if pitch_cond:
-        midi_contour = cropped_feats[:,-2]
-        unvoiced = cropped_feats[:,-1].astype(int) == 1
-        midi_contour[unvoiced] = 0
-        onehot_midi = midi_as_onehot(midi_contour, midi_range)
-        return spectral_feats, onehot_midi
-        
-    else:
-        return spectral_feats
