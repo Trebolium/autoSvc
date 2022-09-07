@@ -1,6 +1,11 @@
 # NOTE: If you want full control for model architecture. please take a look
 # at the code and change whatever you want. Some hyper parameters are hardcoded.
 
+from synth_params import SVC_feat_dir
+import yaml, os
+
+with open(os.path.join(SVC_feat_dir, 'feat_params.yaml')) as File:
+    feat_params = yaml.load(File, Loader=yaml.FullLoader)
 
 class Map(dict):
 	"""
@@ -59,16 +64,16 @@ hparams = Map({
 	'input_type': "raw",
 	'quantize_channels': 65536,  # 65536 or 256
 
-	# Audio:
-	'sample_rate': 16000,
+ 	# Audio:
+	'sample_rate': feat_params['sr'],
 	# this is only valid for mulaw is True
 	'silence_threshold': 2,
-	'num_mels': 80,
-	'fmin': 125,
-	'fmax': 7600,
-	'fft_size': 1024,
+	'num_mels': feat_params['num_harm_feats'],
+	'fmin': feat_params['fmin'],
+	'fmax': feat_params['fmax'],
+	'fft_size': feat_params['fft_size'],
 	# shift can be specified by either hop_size or frame_shift_ms
-	'hop_size': 256,
+	'hop_size': int(feat_params['sr'] * (feat_params['frame_dur_ms']/1000)),
 	'frame_shift_ms': None,
 	'min_level_db': -100,
 	'ref_level_db': 20,
@@ -85,6 +90,34 @@ hparams = Map({
 	# Mixture of logistic distributions:
 	'log_scale_min': float(-32.23619130191664),
 
+	# # Audio:
+	# 'sample_rate': 16000,
+	# # this is only valid for mulaw is True
+	# 'silence_threshold': 2,
+	# 'num_mels': 80,
+	# 'fmin': 125,
+	# 'fmax': 7600,
+	# 'fft_size': 1024,
+	# # shift can be specified by either hop_size or frame_shift_ms
+	# 'hop_size': 256,
+	# 'frame_shift_ms': None,
+	# 'min_level_db': -100,
+	# 'ref_level_db': 20,
+	# # whether to rescale waveform or not.
+	# # Let x is an input waveform, rescaled waveform y is given by:
+	# # y = x / np.abs(x).max() * rescaling_max
+	# 'rescaling': True,
+	# 'rescaling_max': 0.999,
+	# # mel-spectrogram is normalized to [0, 1] for each utterance and clipping may
+	# # happen depends on min_level_db and ref_level_db, causing clipping noise.
+	# # If False, assertion is added to ensure no clipping happens.o0
+	# 'allow_clipping_in_normalization': True,
+
+	# # Mixture of logistic distributions:
+	# 'log_scale_min': float(-32.23619130191664),
+
+ 
+
 	# Model:
 	# This should equal to `quantize_channels` if mu-law quantize enabled
 	# otherwise num_mixture * 3 (pi, mean, log_scale)
@@ -93,7 +126,7 @@ hparams = Map({
 	'stacks': 4,
 	'residual_channels': 512,
 	'gate_channels': 512,  # split into 2 gropus internally for gated activation
-	'skip_out_channels': 256,
+	'skip_out_channels': 256, #int(feat_params['sr'] * (feat_params['frame_dur_ms']/1000))
 	'dropout': 1 - 0.95,
 	'kernel_size': 3,
 	# If True, apply weight normalization as same as DeepVoice3
@@ -104,12 +137,12 @@ hparams = Map({
 	'legacy': True,
 
 	# Local conditioning (set negative value to disable))
-	'cin_channels': 80,
+	'cin_channels': feat_params['num_harm_feats'], #80
 	# If True, use transposed convolutions to upsample conditional features,
 	# otherwise repeat features to adjust time resolution
 	'upsample_conditional_features': True,
 	# should np.prod(upsample_scales) == hop_size
-	'upsample_scales': [4, 4, 4, 4],
+	'upsample_scales': [4, 4, 4, 4], #[2,2,4,5] is needed to support 80 hopsize
 	# Freq axis kernel size for upsampling network
 	'freq_axis_kernel_size': 3,
 
