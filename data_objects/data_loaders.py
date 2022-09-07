@@ -1,4 +1,3 @@
-from distutils.command.clean import clean
 import numpy as np
 import os, pickle, random, math, pdb, sys
 from multiprocessing import Process, Manager
@@ -7,7 +6,7 @@ from train_params import *
 from my_os import recursive_file_retrieval
 from my_audio.pitch import midi_as_onehot
 from my_arrays import fix_feat_length
-from my_normalise import norm_feat_arr
+from my_normalise import norm_feat_arr, get_norm_stats
 
 """
     Retrieves features from 2 directories.
@@ -27,12 +26,16 @@ class DuoFeatureDataset(Dataset):
         _, feats1_fps = recursive_file_retrieval(feats1_subset_dir) # explicitly given outside config to specify whether train or val subset used here
         numpy_fns = [os.path.basename(fp) for fp in sorted(feats1_fps) if fp.endswith(self.ext) and not fp.startswith('.')]
         
+        if norm_method == 'schluter':
+            self.f1_total_mean, self.f1_total_std = get_norm_stats(os.path.join(SIE_feat_dir +'train'))
+            self.f2_total_mean, self.f2_total_std = get_norm_stats(os.path.join(SVC_feat_dir +'train'))
+
         feats2_fps = []
         num_songs = 0
         singer_clips = {}
         for fn in numpy_fns:
             # get path components
-            singer_id, _ = fn.split('_')[0], fn.split('_')[1]
+            singer_id = fn.split('_')[0]
 
             if singer_id not in singer_clips.keys():
                 singer_clips[singer_id] = [fn]
@@ -61,18 +64,23 @@ class DuoFeatureDataset(Dataset):
         feats2_features = np.load(feats2_fp)
 
         # chooses a random uttr here
-        feats1_spec, feats2_spec = feats1_features[:,:self.feats1_num_feats], feats2_features[:,:self.feats2_num_feats]
+        spec1, spec2 = feats1_features[:,:self.feats1_num_feats], feats2_features[:,:self.feats2_num_feats]
         # crop feats
-        feats1_spec, feat1_offset = fix_feat_length(feats1_spec, window_timesteps)
-        feats2_spec, _ = fix_feat_length(feats2_spec, window_timesteps, feat1_offset)
-        
-        feats1_spec = norm_feat_arr(feats1_spec)
-        feats2_spec = norm_feat_arr(feats2_spec)
+        spec1_trimmed, start_step = fix_feat_length(spec1, window_timesteps)
+        spec2_trimmed, _ = fix_feat_length(spec2, window_timesteps, start_step)
 
-        # feats2_spec = feats2_spec[:,feat1_offset:(feat1_offset+window_timesteps)]
+        if norm_method == 'schluter':
+            spec1_normmed = norm_feat_arr(spec1_trimmed, norm_method, (self.f1_total_mean, self.f1_total_std))
+            spec2_normmed = norm_feat_arr(spec2_trimmed, norm_method, (self.f2_total_mean, self.f2_total_std))
+        else:
+            spec1_normmed = norm_feat_arr(spec1_trimmed, norm_method)
+            spec2_normmed = norm_feat_arr(spec2_trimmed, norm_method)
 
-        if pitch_cond:
+        # feats2_spec = feats2_spec[:,start_step:(start_step+window_timesteps)]
+        # print(spec1_normmed.shape, spec2_normmed.shape, f'offset {start_step}/{spec1.shape[0]}')
+        if SVC_pitch_cond or SIE_pitch_cond:
             
+            target_file = os.path.join(pitch_dir, 'train', singer_id, fn)
             # find corresponding file from pitch dir and return pitch_predictions
             if os.path.exists(target_file):
                 pitch_pred = np.load(target_file)[:,-2:]
@@ -87,20 +95,21 @@ class DuoFeatureDataset(Dataset):
             # remove the interpretted values generated because of unvoiced sections
             unvoiced = pitch_pred[:,1].astype(int) == 1
             midi_contour[unvoiced] = 0
+            
             try:
-                onehot_midi = midi_as_onehot(midi_contour, midi_range)
-                # cut to same snipplet as spec_feat examples
-                onehot_midi = onehot_midi[:,feat1_offset:(feat1_offset+window_timesteps)]
-            except AssertionError as e:
+                if start_step < 0:
+                    midi_trimmed, _ = fix_feat_length(midi_contour, window_timesteps)
+                else:
+                    midi_trimmed = midi_contour[start_step:(start_step+window_timesteps)]
+                onehot_midi = midi_as_onehot(midi_trimmed, midi_range)
+            except Exception as e:
+                print(f'Exception {e} caused by file {fn}')
                 pdb.set_trace()
         
-            print(onehot_midi.shape)
         else:
-            onehot_midi = np.zeros((0))
+            onehot_midi = np.zeros((window_timesteps, len(midi_range)+1))
 
-        assert feats1_spec.shape == feats2_spec.shape # features must have same dims/shape for stack
-        feats_spec = np.stack([feats1_spec, feats2_spec])
-        return feats_spec, onehot_midi, fn
+        return spec1_normmed, spec2_normmed, onehot_midi, fn, start_step
 
 
     def __len__(self):
@@ -142,7 +151,7 @@ class DuoFeatureDataset(Dataset):
 #         # chooses a random uttr here
 #         feats, singer_id, example_id = voice_meta[random.randint(0,len(voice_meta)-1)]
 #         # crop feats
-#         if pitch_cond:
+#         if SVC_pitch_cond:
 #             feats_spec, feats_pitch = process_uttrs_feats(feats, self.num_feats)
 #             return feats_spec, feats_pitch, (singer_id, example_id)
 #         else:
@@ -334,7 +343,7 @@ class VctkFromMeta(Dataset):
 
         meta_all_data = pickle.load(open(vctk_data_path, "rb"))
         # split into training data
-        num_training_speakers=train_size
+        num_training_speakers=train_sizes
         random.seed(1)
         training_indices =  random.sample(range(0, len(meta_all_data)), num_training_speakers)
         training_set = []
