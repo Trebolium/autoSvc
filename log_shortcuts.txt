@@ -1,6 +1,0 @@
-Shortcuts taken
-	autoSvc - data_loaders.py - hardcoded self.window_size to be 160, not a calculation made by using feat_params like before
-	autoSvc - main.py - line 109 - len_crop = 160, no explanation
-	autoSvc - sv_converter.py - line 263 - exit(1) should have an explicit error explanation
-	go through main and find out what tags can be omitted
-	
