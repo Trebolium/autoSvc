@@ -1,5 +1,8 @@
 __pycache__/
 runs/
+nohup_logs/
+generated_audio/
+notebooks/
 alternative_runs/
 .ipynb_checkpoints/
 *.pyc
