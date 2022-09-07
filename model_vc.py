@@ -2,6 +2,7 @@ import torch, pdb
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+from train_params import *
 
 class LinearNorm(torch.nn.Module):
     def __init__(self, in_dim, out_dim, bias=True, w_init_gain='linear'):
@@ -35,72 +36,12 @@ class ConvNorm(torch.nn.Module):
         conv_signal = self.conv(signal)
         return conv_signal
 
-class ConvNorm1d(torch.nn.Module): 
-    def __init__(self, in_channels, out_channels, kernel_size=1, stride=1, 
-                 padding=None, dilation=1, bias=True, w_init_gain='linear'): 
-        super(ConvNorm1d, self).__init__() 
-        if padding is None: 
-            assert(kernel_size % 2 == 1) 
-            padding = int(dilation * (kernel_size - 1) / 2) 
- 
-        self.conv = torch.nn.Conv1d(in_channels, out_channels, 
-                                    kernel_size=kernel_size, stride=stride, 
-                                    padding=padding, dilation=dilation, 
-                                    bias=bias) 
- 
-        torch.nn.init.xavier_uniform_( 
-            self.conv.weight, gain=torch.nn.init.calculate_gain(w_init_gain)) 
-
-    def forward(self, signal):
-        conv_signal = self.conv(signal)
-        return conv_signal
-
-class ConvNorm2d(torch.nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size=1, stride=1,
-                 padding=None, dilation=1, bias=True, w_init_gain='linear'):
-        super(ConvNorm2d, self).__init__()
-        if padding is None:
-            assert(kernel_size % 2 == 1)
-            padding = int(dilation * (kernel_size - 1) / 2)
-
-        self.conv = torch.nn.Conv2d(in_channels, out_channels,
-                                    kernel_size=kernel_size, stride=stride,
-                                    padding=padding, dilation=dilation,
-                                    bias=bias)
-
-        torch.nn.init.xavier_uniform_(
-            self.conv.weight, gain=torch.nn.init.calculate_gain(w_init_gain))
-
-    def forward(self, signal):
-        conv_signal = self.conv(signal)
-        return conv_signal
-
-class ConvT2d(torch.nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size=1, stride=1,
-                 padding=None, dilation=1, bias=True, w_init_gain='relu'):
-        super(ConvT2d, self).__init__()
-        if padding is None:
-            assert(kernel_size % 2 == 1)
-            padding = int(dilation * (kernel_size - 1) / 2)
-            
-        self.conv = torch.nn.ConvTranspose2d(in_channels, out_channels,
-                                    kernel_size=kernel_size, stride=stride,
-                                    padding=padding, dilation=dilation,
-                                    bias=bias)
-
-        torch.nn.init.xavier_uniform_(
-            self.conv.weight, gain=torch.nn.init.calculate_gain(w_init_gain)),
-
-    def forward(self, signal):
-        conv_signal = self.conv(signal)
-        return conv_signal 
-
 
 # "4.2. The Content Encoder"
 class Encoder(nn.Module):
     """Encoder module:
     """
-    def __init__(self, dim_neck, dim_emb, freq, num_feats):
+    def __init__(self, dim_neck, dim_emb, freq, num_spec_feats):
         super(Encoder, self).__init__()
         self.dim_neck = dim_neck
         self.freq = freq
@@ -109,7 +50,7 @@ class Encoder(nn.Module):
         # "the input to the content encoder is the 80-dimensional mel-spectrogram of X1 concatenated with the speaker embedding" - I think the embeddings are copy pasted from a dataset, as the Speaker Decoder is pretrained and may not actually appear in this implementation?
             conv_layer = nn.Sequential(
         # "the input to the content encoder is the 80-dimensional mel-spectrogram of X1 concatenated with the speaker embedding. The concatenated features are fed into three 5 × 1 convolutional layers, each followed by batch normalization and ReLU activation. The number of channels i
-                ConvNorm(num_feats+dim_emb if i==0 else 512,
+                ConvNorm(num_spec_feats+dim_emb if i==0 else 512,
                          512,
                          kernel_size=5, stride=1,
                          padding=2,
@@ -123,6 +64,8 @@ class Encoder(nn.Module):
 
         # c_org is speaker embedding
     def forward(self, x, c_org):
+        if svc_model_name == 'defaultName':
+            pdb.set_trace()
         x = x.squeeze(1).transpose(2,1)
         # broadcasts c_org to a compatible shape to merge with x
         c_org = c_org.unsqueeze(-1).expand(-1, -1, x.size(-1))
@@ -130,7 +73,9 @@ class Encoder(nn.Module):
         saved_enc_outs = [x] ### 
         for conv in self.convolutions:
             x = F.relu(conv(x))
-            saved_enc_outs.append(x) ### 
+            saved_enc_outs.append(x) ###
+        if svc_model_name == 'defaultName':
+            pdb.set_trace()
         x = x.transpose(1, 2)
         self.lstm.flatten_parameters()
         # lstms output 64 dim
@@ -147,6 +92,8 @@ class Encoder(nn.Module):
         for i in range(0, outputs.size(1), self.freq):
             # remeber that i is self.freq, not increments of 1)
             codes.append(torch.cat((out_forward[:,i+self.freq-1,:],out_backward[:,i,:]), dim=-1))
+        if svc_model_name == 'defaultName':
+            pdb.set_trace()
         #saved_enc_outs.append(codes_cat) ###
         # if self.freq is 32, then codes is a list of 4 tensors of size 64
         return codes, saved_enc_outs
@@ -155,10 +102,10 @@ class Encoder(nn.Module):
 class Decoder(nn.Module):
     """Decoder module:
     """
-    def __init__(self, dim_neck, dim_emb, dim_pre, num_feats):
+    def __init__(self, dim_neck, dim_emb, dim_pre, num_spec_feats, dim_pitch=0):
         super(Decoder, self).__init__()
 
-        self.lstm1 = nn.LSTM(dim_neck*2+dim_emb, dim_pre, 1, batch_first=True)
+        self.lstm1 = nn.LSTM(dim_neck*2+dim_emb+dim_pitch, dim_pre, 1, batch_first=True)
 
         convolutions = []
         for i in range(3):
@@ -173,11 +120,14 @@ class Decoder(nn.Module):
         self.convolutions = nn.ModuleList(convolutions)
 
         self.lstm2 = nn.LSTM(dim_pre, 1024, 2, batch_first=True)
-        self.linear_projection = LinearNorm(1024, num_feats)
+        self.linear_projection = LinearNorm(1024, num_spec_feats)
 
     def forward(self, x):
 
-        #self.lstm1.flatten_parameters()
+        # self.lstm1.flatten_parameters()
+        if svc_model_name == 'defaultName':
+            pdb.set_trace()
+        pdb.set_trace()
         saved_dec_outs = [x.transpose(1,2)] ###
         x, _ = self.lstm1(x)
         saved_dec_outs.append(x.transpose(1,2)) ###
@@ -199,13 +149,13 @@ class Postnet(nn.Module):
         - Five 1-d convolution with 512 channels and kernel size 5
     """
 
-    def __init__(self, num_feats):
+    def __init__(self, num_spec_feats):
         super(Postnet, self).__init__()
         self.convolutions = nn.ModuleList()
 
         self.convolutions.append(
             nn.Sequential(
-                ConvNorm1d(num_feats, 512,
+                ConvNorm(num_spec_feats, 512,
                          kernel_size=5, stride=1,
                          padding=2,
                          dilation=1, w_init_gain='tanh'),
@@ -215,7 +165,7 @@ class Postnet(nn.Module):
         for i in range(1, 5 - 1):
             self.convolutions.append(
                 nn.Sequential(
-                    ConvNorm1d(512,
+                    ConvNorm(512,
                              512,
                              kernel_size=5, stride=1,
                              padding=2,
@@ -225,11 +175,11 @@ class Postnet(nn.Module):
 
         self.convolutions.append(
             nn.Sequential(
-                ConvNorm1d(512, num_feats,
+                ConvNorm(512, num_spec_feats,
                          kernel_size=5, stride=1,
                          padding=2,
                          dilation=1, w_init_gain='linear'),
-                nn.BatchNorm1d(num_feats))
+                nn.BatchNorm1d(num_spec_feats))
             )
 
     def forward(self, x):
@@ -243,14 +193,16 @@ class Postnet(nn.Module):
 
 class Generator(nn.Module):
     """Generator network."""
-    def __init__(self, dim_neck, dim_emb, dim_pre, freq, num_feats):
+    def __init__(self, dim_neck, dim_emb, dim_pre, freq, num_spec_feats, dim_pitch=0):
         super(Generator, self).__init__()
-        
-        self.encoder = Encoder(dim_neck, dim_emb, freq, num_feats)
-        self.decoder = Decoder(dim_neck, dim_emb, dim_pre, num_feats)
-        self.postnet = Postnet(num_feats)
 
-    def forward(self, x, c_org, c_trg):
+        self.encoder = Encoder(dim_neck, dim_emb, freq, num_spec_feats)
+        self.decoder = Decoder(dim_neck, dim_emb, dim_pre, num_spec_feats, dim_pitch) #dim_pitch not getting value from above dim_pitch
+        self.postnet = Postnet(num_spec_feats)
+
+    def forward(self, x, c_org, c_trg, pitch_cont=None):
+        if svc_model_name == 'defaultName':
+            pdb.set_trace()
         # codes is a LIST of tensors                
         codes, saved_enc_outs = self.encoder(x, c_org)
         # if no c_trg given, then just return the formatted encoder codes
@@ -265,6 +217,11 @@ class Generator(nn.Module):
         code_exp = torch.cat(tmp, dim=1)
         # concat reformated encoder output with target speaker embedding
         encoder_outputs = torch.cat((code_exp, c_trg.unsqueeze(1).expand(-1,x.size(1),-1)), dim=-1)
+        if svc_model_name == 'defaultName':
+            pdb.set_trace()
+        if SVC_pitch_cond: #if pitchCond it activate, concatenate pitch contour with encoder_outputs
+            encoder_outputs = torch.cat((encoder_outputs, pitch_cont), dim=-1)
+        pdb.set_trace()
         mel_outputs, saved_dec_outs = self.decoder(encoder_outputs)
         # then put mel_ouputs through remaining postnet section of NN
         # the postnet process produces the RESIDUAL information that gets added to the mel output

@@ -9,7 +9,7 @@ import torch, pdb
 
 
 class SingerIdEncoder(nn.Module):
-    def __init__(self, device, loss_device, class_num, num_feats):
+    def __init__(self, device, loss_device, num_feats):
         super().__init__()
         self.loss_device = loss_device
         
@@ -22,7 +22,7 @@ class SingerIdEncoder(nn.Module):
                                 out_features=model_embedding_size).to(device)
         self.relu = torch.nn.ReLU().to(device)
         
-        self.class_layer = nn.Linear(model_embedding_size, class_num).to(device)
+        # self.class_layer = nn.Linear(model_embedding_size, class_num).to(device)
             # ,nn.Dropout(self.dropout)
             # ,nn.BatchNorm1d(512)
             # ,nn.ReLU()
@@ -63,9 +63,10 @@ class SingerIdEncoder(nn.Module):
         
         # L2-normalize it
         embeds = embeds_raw / (torch.norm(embeds_raw, dim=1, keepdim=True) + 1e-5)        
-        class_preds = self.class_layer(embeds)
+        # class_preds = self.class_layer(embeds)
 
-        return embeds, class_preds
+        # return embeds, class_preds
+        return embeds
     
     def similarity_matrix(self, embeds):
         """
