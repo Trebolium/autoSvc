@@ -1,4 +1,7 @@
-import torch, pdb
+import pdb
+import sys
+from turtle import forward
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
@@ -64,7 +67,7 @@ class Encoder(nn.Module):
 
         # c_org is speaker embedding
     def forward(self, x, c_org):
-        if svc_model_name == 'defaultName':
+        if SVC_model_name == 'defaultName':
             pdb.set_trace()
         x = x.squeeze(1).transpose(2,1)
         # broadcasts c_org to a compatible shape to merge with x
@@ -74,7 +77,7 @@ class Encoder(nn.Module):
         for conv in self.convolutions:
             x = F.relu(conv(x))
             saved_enc_outs.append(x) ###
-        if svc_model_name == 'defaultName':
+        if SVC_model_name == 'defaultName':
             pdb.set_trace()
         x = x.transpose(1, 2)
         self.lstm.flatten_parameters()
@@ -92,7 +95,7 @@ class Encoder(nn.Module):
         for i in range(0, outputs.size(1), self.freq):
             # remeber that i is self.freq, not increments of 1)
             codes.append(torch.cat((out_forward[:,i+self.freq-1,:],out_backward[:,i,:]), dim=-1))
-        if svc_model_name == 'defaultName':
+        if SVC_model_name == 'defaultName':
             pdb.set_trace()
         #saved_enc_outs.append(codes_cat) ###
         # if self.freq is 32, then codes is a list of 4 tensors of size 64
@@ -125,9 +128,8 @@ class Decoder(nn.Module):
     def forward(self, x):
 
         # self.lstm1.flatten_parameters()
-        if svc_model_name == 'defaultName':
+        if SVC_model_name == 'defaultName':
             pdb.set_trace()
-        pdb.set_trace()
         saved_dec_outs = [x.transpose(1,2)] ###
         x, _ = self.lstm1(x)
         saved_dec_outs.append(x.transpose(1,2)) ###
@@ -201,7 +203,7 @@ class Generator(nn.Module):
         self.postnet = Postnet(num_spec_feats)
 
     def forward(self, x, c_org, c_trg, pitch_cont=None):
-        if svc_model_name == 'defaultName':
+        if SVC_model_name == 'defaultName':
             pdb.set_trace()
         # codes is a LIST of tensors                
         codes, saved_enc_outs = self.encoder(x, c_org)
@@ -217,11 +219,11 @@ class Generator(nn.Module):
         code_exp = torch.cat(tmp, dim=1)
         # concat reformated encoder output with target speaker embedding
         encoder_outputs = torch.cat((code_exp, c_trg.unsqueeze(1).expand(-1,x.size(1),-1)), dim=-1)
-        if svc_model_name == 'defaultName':
+        if SVC_model_name == 'defaultName':
             pdb.set_trace()
         if SVC_pitch_cond: #if pitchCond it activate, concatenate pitch contour with encoder_outputs
             encoder_outputs = torch.cat((encoder_outputs, pitch_cont), dim=-1)
-        pdb.set_trace()
+        
         mel_outputs, saved_dec_outs = self.decoder(encoder_outputs)
         # then put mel_ouputs through remaining postnet section of NN
         # the postnet process produces the RESIDUAL information that gets added to the mel output
@@ -236,3 +238,36 @@ class Generator(nn.Module):
         
         return mel_outputs, mel_outputs_postnet, torch.cat(codes, dim=-1), saved_enc_outs, saved_dec_outs
 
+class Aux_Voice_Classifier(nn.Module):
+    def __init__(self, input_dim, class_num):
+        super(Aux_Voice_Classifier, self).__init__()
+
+        self.fc1 = nn.Sequential(nn.Linear(input_dim, input_dim//2),
+                                 nn.BatchNorm1d(input_dim//2),
+                                 nn.ReLU()
+                                 )
+        self.classlayer = nn.Linear(input_dim//2, class_num)
+
+    def forward(self, x):
+        x.flatten()
+        x1 = self.fc1(x)
+        prediction = torch.sigmoid(self.classlayer(x1))
+        return prediction
+
+
+class Disentangle_Eval(nn.Module):
+    """Generator network."""
+    def __init__(self, dim_neck, dim_emb, freq, num_spec_feats, class_num):
+        super(Disentangle_Eval, self).__init__()
+
+        self.encoder = Encoder(dim_neck, dim_emb, freq, num_spec_feats)
+        self.classer = Aux_Voice_Classifier((dim_neck*dim_emb), class_num)
+
+
+    def forward(self, x, c_org, c_trg, pitch_cont=None):
+        if SVC_model_name == 'defaultName':
+            pdb.set_trace()
+         # codes is a LIST of tensors                
+        codes, saved_enc_outs = self.encoder(x, c_org)
+        prediction = self.classer(codes)
+        return prediction

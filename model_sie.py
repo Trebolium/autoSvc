@@ -1,3 +1,4 @@
+import pdb
 from train_params import *
 from scipy.interpolate import interp1d
 from sklearn.metrics import roc_curve
@@ -5,13 +6,14 @@ from torch.nn.utils import clip_grad_norm_
 from scipy.optimize import brentq
 from torch import nn
 import numpy as np
-import torch, pdb
+import torch
 
 
 class SingerIdEncoder(nn.Module):
-    def __init__(self, device, loss_device, num_feats):
+    def __init__(self, device, loss_device, num_feats, class_num=None):
         super().__init__()
         self.loss_device = loss_device
+        self.class_num = class_num
         
         # Network defition
         self.lstm = nn.LSTM(input_size=num_feats,
@@ -22,10 +24,11 @@ class SingerIdEncoder(nn.Module):
                                 out_features=model_embedding_size).to(device)
         self.relu = torch.nn.ReLU().to(device)
         
-        # self.class_layer = nn.Linear(model_embedding_size, class_num).to(device)
-            # ,nn.Dropout(self.dropout)
-            # ,nn.BatchNorm1d(512)
-            # ,nn.ReLU()
+        if self.class_num != None:
+            self.class_layer = nn.Sequential(nn.Linear(model_embedding_size, self.class_num).to(device)
+                ,nn.BatchNorm1d(self.class_num)
+                ,nn.ReLU()
+                )
             
         
         # Cosine similarity scaling (with fixed initial parameter values)
@@ -63,10 +66,12 @@ class SingerIdEncoder(nn.Module):
         
         # L2-normalize it
         embeds = embeds_raw / (torch.norm(embeds_raw, dim=1, keepdim=True) + 1e-5)        
-        # class_preds = self.class_layer(embeds)
-
-        # return embeds, class_preds
-        return embeds
+        
+        if self.class_num != None:
+            class_preds = self.class_layer(embeds)
+            return class_preds
+        else:
+            return embeds
     
     def similarity_matrix(self, embeds):
         """

@@ -7,13 +7,14 @@ import matplotlib.pyplot as plt
 from model_vc import Generator
 import soundfile as sf
 
+
 # from convert.synthesis import build_model
 # from convert.synthesis import wavegen
 
-from my_interaction import binary_answer
 from my_audio.world import mfsc_to_world_to_audio
 from my_audio.pitch import midi_as_onehot
 from neural.model_mod import checkpoint_model_optim_keys
+from my_os import overwrite_dir
 
 
 """Convert world pitch info to 1hot midi"""
@@ -48,10 +49,10 @@ def get_onehot_midi(midi_voicing, midi_range):
 
 """Currently designed to take model ckpts of 2 slightly different dictionary keys"""
 def setup_sie(device, loss_device, SIE_path, adam_init):
-    sie_checkpoint = torch.load(os.path.join(SIE_path, 'saved_model.pt'))
+    sie_checkpoint = torch.load(os.path.join(SIE_path, 'saved_model.pt'), map_location='cpu')
     new_state_dict = OrderedDict()
 
-    if SIE_path.endswith('autoVc_pretrained'):
+    if SIE_path.endswith('autoVc_pretrainedOnVctk_Mels80'):
         model_state = 'model_b'
         sie_num_feats_used = sie_checkpoint[model_state]['module.lstm.weight_ih_l0'].shape[1]
     else:
@@ -59,13 +60,13 @@ def setup_sie(device, loss_device, SIE_path, adam_init):
         sie_num_feats_used = sie_checkpoint[model_state]['lstm.weight_ih_l0'].shape[1]
     sie = SingerIdEncoder(device, loss_device, sie_num_feats_used)
 
-    if 'autoVc_pretrained' in SIE_path:
+    if SIE_path.endswith('autoVc_pretrainedOnVctk_Mels80'):
         new_state_dict['similarity_weight'] = sie.similarity_weight
         new_state_dict['similarity_bias'] = sie.similarity_bias
     
     for (key, val) in sie_checkpoint[model_state].items():
 
-        if SIE_path.endswith('autoVc_pretrained'):
+        if SIE_path.endswith('autoVc_pretrainedOnVctk_Mels80'):
             key = key[7:] # gets right of the substring 'module'
             if key.startswith('embedding'):
                 key = 'linear.' +key[10:]
@@ -112,7 +113,10 @@ def setup_gen(dim_neck, dim_emb, dim_pre, sample_freq, num_feats, pitch_dim, dev
             for k, v in state.items():
                 if isinstance(v, torch.Tensor):
                     state[k] = v.to(device)
-        train_latest_step = g_checkpoint['step']
+        try:
+            train_latest_step = g_checkpoint['step']
+        except KeyError as e:
+            train_latest_step = 0
     else:
         train_latest_step = 0
 
@@ -123,22 +127,6 @@ def setup_gen(dim_neck, dim_emb, dim_pre, sample_freq, num_feats, pitch_dim, dev
 # this function seems like a hack - find out the standard method for passing boolean values as parser args
 def str2bool(v):
     return v.lower() in ('true')
-
-
-# as it says on the tin
-def overwrite_dir(directory, ask):
-    if os.path.exists(directory):
-        if ask:
-            print(f'Directory name {directory} already exists. Would you like to overwrite it?')
-            answer = binary_answer()
-            if answer:
-                shutil.rmtree(directory)
-            else:
-                print('Try a new file name and re-run this program')
-                exit(0)
-        else:
-            shutil.rmtree(directory)
-    os.makedirs(directory)
 
 
 "finds the index for each new song in dataset"
@@ -161,7 +149,7 @@ def new_dir_setup(ask, svc_model_dir, svc_model_name):
     os.makedirs(model_dir_path +'/generated_wavs')
     os.makedirs(model_dir_path +'/image_comparison')
     os.makedirs(model_dir_path +'/input_tensor_plots')
-    files = ['model_vc.py', 'sv_converter.py', 'main.py', 'utils.py', 'train_params.py']
+    files = ['model_vc.py', 'sv_converter.py', 'sv_converter_alterations.py', 'main.py', 'main_alterations.py', 'utils.py', 'train_params.py']
 
     for file in files:
         dst_file = os.path.join(model_dir_path, 'this_' + file)
