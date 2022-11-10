@@ -10,7 +10,6 @@ from my_plot import array_to_img
 from my_os import recursive_file_retrieval
 import utils
 
-
 # SOLVER IS THE MAIN SETUP FOR THE NN ARCHITECTURE. INSIDE SOLVER IS THE GENERATOR (G)
 class AutoSvc(object):
 
@@ -35,7 +34,7 @@ class AutoSvc(object):
         metadata_path = '/homes/bdoc3/my_data/voice_embs_visuals_metadata'
         self.train_singer_metadata = pickle.load(open(os.path.join(metadata_path, os.path.basename(SIE_model_path), os.path.basename(SIE_feat_dir), 'train', f'voices_metadata{pkl_fn_extras}.pkl'), 'rb'))
         self.val_singer_metadata = pickle.load(open(os.path.join(metadata_path, os.path.basename(SIE_model_path), os.path.basename(SIE_feat_dir), 'val', f'voices_metadata{pkl_fn_extras}.pkl'), 'rb'))
-        
+        self.loss_names = ['recon', 'cc', 'sie', 'total']
         # if tiny_run:
         #     # because tiny_run dirs carry copies of whats in train subset
         #     self.val_singer_metadata = self.train_singer_metadata
@@ -71,13 +70,14 @@ class AutoSvc(object):
         self.first_time_pdb = True
         if use_aux_classer:
             num_classes = len(self.train_singer_metadata)
-            self.dis_ev = self.load_disentangle_eval(num_classes)
+            self.v_classer, self.vclass_optim = self.load_disentangle_eval(num_classes)
 
     def load_disentangle_eval(self, num_classes):
         bottleneck = int((window_timesteps/sample_freq) * dim_neck)
-        self.v_classer = Aux_Voice_Classifier(bottleneck, num_classes)
-        self.v_classer = self.v_classer.to(self.device)
-        return self.v_classer
+        v_classer = Aux_Voice_Classifier(bottleneck, num_classes)
+        v_classer = v_classer.to(self.device)
+        vclass_optim = torch.optim.Adam(v_classer.parameters(), adam_init)
+        return v_classer, vclass_optim
 
     # since each runthrough of the dataloader retieves 1 example per singer, we must repeat the dataloader a certain number of times
     # this multiple is represented by iter_multiple
@@ -131,6 +131,21 @@ class AutoSvc(object):
    
 
     def batch_iterate(self, mode, data_loader, this_cycle_initial_step, singer_metadata, num_loader_iters):
+
+        def avg_loss_print(interlog_counter):
+            et = time.time() - self.start_time
+            et = str(datetime.timedelta(seconds=et))[:-7]
+            # if mode == 'train':
+            log = "Elapsed [{}], Mode {}, Iter [{}/{}]".format(et, mode, i, max_iters)
+            for j in range(len(interlog_losses_dict)):
+                key = self.loss_names[j]
+                avg_loss_per_pass = interlog_losses_dict[key] / interlog_counter
+                log += f", interlog_{key}_loss: " +"{:.4f}".format(avg_loss_per_pass)
+                intercycle_losses_dict[key] += avg_loss_per_pass
+                interlog_losses_dict[key] = 0.
+            interlog_counter = 0
+            # log += ", batch_processing: {:.4f}".format(sum(self.times) / len(self.times))
+            print(log)
         
         if mode == 'train':
             iter_multiple = self.train_iter_multiple
@@ -138,12 +153,13 @@ class AutoSvc(object):
             iter_multiple = self.val_iter_multiple
 
         singer_ids = [i[0] for i in singer_metadata]
-        intercycle_loss = 0
-        interlog_loss = 0
+        interlog_losses_dict = dict()
+        for loss_name in self.loss_names:
+            interlog_losses_dict[loss_name] = 0.
+        intercycle_losses_dict = interlog_losses_dict.copy()
         interlog_counter = 0 # exists because a proceeding train cycle may not start with (iter % log_step) = 0 - relevant when calculating avg losses and printing
         for _ in range(iter_multiple):
             data_iter = iter(data_loader)
-
             for i in range(this_cycle_initial_step+1, (this_cycle_initial_step+1 + num_loader_iters)): # using +1 because of some scheduler sync issues (quick hack)         
 
                 interlog_counter += 1
@@ -221,99 +237,87 @@ class AutoSvc(object):
                 g_loss_id_prnt = F.l1_loss(SVC_input, x_identic_prnt)  
                 g_loss_id_psnt = F.l1_loss(SVC_input, x_identic_psnt)   
 
-                g_loss = (prnt_loss_weight * g_loss_id_prnt) + (psnt_loss_weight * g_loss_id_psnt)
+                recon_loss = (prnt_loss_weight * g_loss_id_prnt) + (psnt_loss_weight * g_loss_id_psnt)
+                total_loss = recon_loss
 
+                
+                # Code semantic loss. For calculating this, there is no target embedding
+                code_reconst = self.G(x_identic_psnt, emb_org, None)
+                # gets the l1 loss between original encoder output and reconstructed encoder output
+                g_loss_cd = F.l1_loss(code_real, code_reconst)
+                cc_loss = (code_loss_weight * g_loss_cd)
                 if include_code_loss:
-                    # Code semantic loss. For calculating this, there is no target embedding
-                    code_reconst = self.G(x_identic_psnt, emb_org, None)
-                    # gets the l1 loss between original encoder output and reconstructed encoder output
-                    g_loss_cd = F.l1_loss(code_real, code_reconst)
-                    g_loss += (code_loss_weight * g_loss_cd)
+                    total_loss += cc_loss
 
-                if use_aux_classer:
-                    predictions = self.v_classer(code_real)
-                    # accuracy = self.get_accuracy(predictions, y_data)
-                    pred_loss = F.cross_entropy(predictions, y_data)
-                    pred_loss = pred_loss.detach().clone()
-                    confusion_pred_loss = -pred_loss
-                    g_loss += confusion_pred_loss
+                """
+                Uncomment block below when you've addressed the following
+                doesn't make sense to train a network using input data that changes structure over time?
+                how to use reset_grad() here
+                """
+                # if use_aux_classer:
+                #     code_real_clone = code_real.detach().clone() # we do want pred_loss to propogate through 
+                #     predictions = self.v_classer(code_real_clone)
+                #     # accuracy = self.get_accuracy(predictions, y_data)
+                #     pred_loss = F.cross_entropy(predictions, y_data)
+                #     # pred_loss = pred_loss.detach().clone()
+                #     confusion_pred_loss = -pred_loss
+                #     confusion_pred_loss.backward()
+                #     self.vclass_optim.step()
+                #     self.vclass_optim
+                #     total_loss += confusion_pred_loss
 
+
+                cc_emb = self.sie(x_identic_psnt)
+                cc_emb_loss = F.l1_loss(emb_org, cc_emb)
+                cc_emb_loss = cc_emb_loss.detach().clone() # we don't want this loss to backprop through self.sie
                 if use_emb_loss:
-                    cc_emb = self.sie(x_identic_psnt)
-                    cc_emb_loss = F.l1_loss(emb_org, cc_emb)
-                    cc_emb_loss = cc_emb_loss.detach().clone()
-                    g_loss += cc_emb_loss
+                    total_loss += cc_emb_loss
 
                 ########## OLD LOSS VERSION ^^^
-
                 # remember that l1_loss gives you mean over batch, unless specificed otherwise
-                interlog_loss += g_loss
-
-                # logging losses
-                # loss_vals = [g_loss_id.item(), g_loss_id_prnt.item(), g_loss_cd.item()]
-                # for j, k in enumerate(keys):
-                #     set_of_loss_list[k].append(loss_vals[j]) # to be averaged when logging and reset
-                    # losses_list[j] += loss_vals[j] # gradually summing losses as cycle progresses   
-                
-                # SIE_midi = np.concatenate((SIE_feats_npy[0], onehot_midi_npy[0]), axis=1)
-                # try: 
-                feat_npys = [np.rot90(onehot_midi_npy[0]), np.rot90(SIE_feats_npy[0]),
-                            np.rot90(SVC_feats_npy[0]), np.rot90(x_identic_prnt.cpu().data.numpy()[0])]
-
 
                 # if train do backprop
                 if mode == 'train':
                     self.train_latest_step = i
                     self.reset_grad()
-                    g_loss.backward()
+                    total_loss.backward()
                     self.g_optimizer.step()
                     # spec nad freq have to be multiple of len(data_loader)
                     if i % spec_freq == 0:
+                        feat_npys = [np.rot90(onehot_midi_npy[0]), np.rot90(SIE_feats_npy[0]),
+                                    np.rot90(SVC_feats_npy[0]), np.rot90(x_identic_prnt.cpu().data.numpy()[0])]
                         self.plot_comparisons(feat_npys, self.train_latest_step) 
 
-                # Print out training information.
+                all_losses = [recon_loss, cc_loss, cc_emb_loss, total_loss]
+                assert len(all_losses) == len(self.loss_names) and len(all_losses) == len(interlog_losses_dict)
+                for j in range(len(all_losses)):
+                    key = self.loss_names[j]
+                    interlog_losses_dict[key] += float(all_losses[j])
+
                 if i % log_step == 0 or i == (this_cycle_initial_step + num_loader_iters):
-                    et = time.time() - self.start_time
-                    et = str(datetime.timedelta(seconds=et))[:-7]
-                    # if mode == 'train':
-                    log = "Elapsed [{}], Mode {}, Iter [{}/{}]".format(et, mode, i, max_iters)
-                    # else:
-                    #     i_in_cycle =  i - this_cycle_initial_step
-                    #     log = "Elapsed [{}], Mode {}, Iter [{}/{}] (".format(et, mode, i_in_cycle, len(data_loader))
-                    avg_loss_per_pass = interlog_loss / interlog_counter
-                    log += ", average_loss_per_logstep: {:.4f}".format(avg_loss_per_pass)
-                    intercycle_loss += avg_loss_per_pass
-                    interlog_loss = 0
-                    interlog_counter = 0
-                    # log += ", batch_processing: {:.4f}".format(sum(self.times) / len(self.times))
-                    print(log)
+
+                    avg_loss_print(interlog_counter)
 
                     if i % ckpt_freq == 0:
                         dst_path = os.path.join(SVC_models_dir, SVC_model_name, f'ckpt_{i}.pt')
-                        torch.save(
-                            {
-                            "step": self.train_latest_step,
-                            "ge2e_loss": ('avg_loss_per_pass', avg_loss_per_pass),
-                            "model_state": self.G.state_dict(),
-                            "optimizer_state": self.g_optimizer.state_dict(),
-                            },
-                            dst_path)
+                        save_dict = {"step": self.train_latest_step,
+                                    "model_state": self.G.state_dict(),
+                                    "optimizer_state": self.g_optimizer.state_dict()}
+                        for loss_name in self.loss_names:
+                            save_dict[loss_name] = intercycle_losses_dict[loss_name]
+                        torch.save(save_dict, dst_path)
                         print(f'Saved model at {dst_path}')
-
-                # if tiny_run:
-                #     if this_cycle_initial_step >= max_iters or this_cycle_initial_step % ckpt_freq == 0:
-                #          self.save_by_val_loss(0)
-                
-                # track_time = time.time()-time_before
-                # self.times.append(track_time)
 
             # update this_cycle_initial_step for when you start next cycle of iter_multiple
             this_cycle_initial_step = i
-        """FINISH CYCLE"""
 
+        """FINISH CYCLE"""
         # Print average loss over cycle
-        cycle_loss = intercycle_loss / math.ceil(num_loader_iters/log_step)
-        log = "This cycle average loss: {:.4f}".format(cycle_loss)
+        log = "This cycle averages loss: "
+        for j in range(len(intercycle_losses_dict)):
+            loss_name = self.loss_names[j]
+            intercycle_losses_dict[loss_name] = intercycle_losses_dict[loss_name] / math.ceil(num_loader_iters/log_step)
+            log += f"{loss_name}" +"{:.4f}, ".format(intercycle_losses_dict[loss_name])
         print(log)
         
         # when cycle finished in val mode, save loss, EarlyStopping check, save plot
@@ -321,26 +325,27 @@ class AutoSvc(object):
             # NEED TO EMPLOY THIS ONLY AFTER THE END OF EACH VAL ITER CYCLE, NOT INDIVIDUALLY AFTER EACH VAL
                 
             # if EarlyStopping, read the docstrings if necessary, this section is unorthodox
-            check = self.EarlyStopping.check(cycle_loss)
+            watched_loss = intercycle_losses_dict[early_stopping_loss]
+            check = self.EarlyStopping.check(watched_loss)
             if check == 'lowest_loss':
-                self.save_by_val_loss(cycle_loss)
+                self.save_by_val_loss(watched_loss)
                 print(f"Saved model (step {self.train_latest_step}) at time {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))}")
             elif check == 0:
                 print(f'Early stopping employed on model {SVC_model_name}.')
                 self.closeWriter()
                 exit(0)
         
-        return cycle_loss
+        return intercycle_losses_dict
 
 
 #=====================================================================================================================================#
 
-    def logs(self, cycle_loss, mode):
-        if mode=='train':
-            self.writer.add_scalar(f"Loss_id_psnt_{use_loader}/{mode}", cycle_loss, self.train_latest_step)
-        else:
-            self.writer.add_scalar(f"Loss_id_psnt_{mode[4:]}/{mode[:4]}", cycle_loss, self.train_latest_step)
+    def logs(self, intercycle_losses_dict, mode):
 
+        for j in range(len(intercycle_losses_dict)):
+            loss_name = self.loss_names[j]
+            this_loss = intercycle_losses_dict[loss_name]
+            self.writer.add_scalar(f"{loss_name}_loss_id_psnt_{use_loader}/{mode}", this_loss, self.train_latest_step)
         self.writer.flush()
 
 #=====================================================================================================================================#        
@@ -358,9 +363,9 @@ class AutoSvc(object):
             mode = 'train'
             print('TRAIN REPORT\n')
             self.G.train()
-            cycle_loss = self.batch_iterate(mode, train_loader, self.train_latest_step, self.train_singer_metadata, num_loader_iters)
+            intercycle_losses_dict = self.batch_iterate(mode, train_loader, self.train_latest_step, self.train_singer_metadata, num_loader_iters)
             
-            self.logs(cycle_loss, mode)
+            self.logs(intercycle_losses_dict, mode)
             # then use validation loaders (or just the one)
             for ds_label, val_loader in val_loaders:
                 vt_fraction = len(val_loader) / len(train_loader)
