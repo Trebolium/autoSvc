@@ -1,4 +1,4 @@
-import os, shutil, yaml, torch, pickle, pdb
+import os, shutil, yaml, torch, pickle, pdb, csv
 from shutil import copyfile
 from model_sie import SingerIdEncoder
 from collections import OrderedDict
@@ -96,7 +96,7 @@ def setup_gen(dim_neck, dim_emb, dim_pre, sample_freq, num_feats, pitch_dim, dev
     g_optimizer = torch.optim.Adam(G.parameters(), adam_init)
 
     if svc_ckpt_path!='':
-        g_checkpoint = torch.load(svc_ckpt_path)
+        g_checkpoint = torch.load(svc_ckpt_path, map_location='cpu')
         model_key, optim_key = checkpoint_model_optim_keys(g_checkpoint)
         for k in g_checkpoint.keys():
             if k.startswith('model'):
@@ -149,7 +149,7 @@ def new_dir_setup(ask, svc_model_dir, svc_model_name):
     os.makedirs(model_dir_path +'/generated_wavs')
     os.makedirs(model_dir_path +'/image_comparison')
     os.makedirs(model_dir_path +'/input_tensor_plots')
-    files = ['model_vc.py', 'sv_converter.py', 'sv_converter_alterations.py', 'main.py', 'main_alterations.py', 'utils.py', 'train_params.py']
+    files = ['model_vc.py', 'sv_converter.py', 'main.py', 'utils.py', 'train_params.py']
 
     for file in files:
         dst_file = os.path.join(model_dir_path, 'this_' + file)
@@ -193,3 +193,132 @@ def determine_dim_size(SIE_params, SVC_params, SIE_feat_dir, SVC_feat_dir, use_a
 
     return SIE_params, SVC_params
 
+
+def vctk_id_gender_list(csv_path='/homes/bdoc3/my_data/text_data/vctk/speaker-info.txt'):   
+    f = open(csv_path, 'r')
+    header = f.readline()
+    lines = f.readlines()
+    id_list = []
+    gender_list = []
+    for line in lines:
+        line_elements = [el for el in line.split(' ') if el!='']
+        id_list.append(line_elements[0])
+        gender_list.append(line_elements[2])
+    return id_list, gender_list
+
+def get_vocalset_gender_techs():
+
+    singing_techniques = ['belt','lip_trill','straight','vocal_fry','vibrato','breathy']
+    gender_group_labels_arr = []
+    technique_group_labels_arr = []
+    for voice_meta in metad_by_singer_list:
+        voice_fns = substring_inclusion(voice_meta[2:], singing_techniques)
+        print(len(voice_fns))
+
+        for fn in voice_fns:
+
+            # count += 1
+
+            if fn.startswith('m'):
+                gender_group_labels_arr.append('male')
+            elif fn.startswith('f'):
+                gender_group_labels_arr.append('female')
+            
+            st_found = False
+            for st_i, st in enumerate(singing_techniques):
+                if st in fn:
+                    technique_group_labels_arr.append(st_i)
+                    st_found = True
+            if not st_found:
+                pdb.set_trace()
+                raise Exception('St not found')
+                
+    gender_group_labels_arr = np.asarray(gender_group_labels_arr)
+    all_labels_arrs.append(gender_group_labels_arr)
+    all_label_names.append('gender')
+    all_labels_class_sizes.append(2)
+
+    technique_group_labels_arr = np.asarray(technique_group_labels_arr)
+    all_labels_arrs.append(technique_group_labels_arr)
+    all_label_names.append('singing_technique')
+    all_labels_class_sizes.append(config.max_num_techs)
+    return gender_group_labels_arr, technique_group_labels_arr
+
+
+def get_vocadito_gender():
+    gender_group_labels_arr = []
+    csv_path = '/homes/bdoc3/my_data/text_data/vocadito/vocadito_metadata.csv'
+    f = open(csv_path, 'r')
+    reader = csv.reader(f)
+    header = next(reader)
+    singer_meta = [row for row in reader]
+    perf_key_meta_list = [row[0] for row in singer_meta]
+    gender_meta_list = [row[4] for row in singer_meta]
+
+    for voice_meta in metad_by_singer_list:
+
+        uttrs_fps = voice_meta[2:]
+        for fp in uttrs_fps:
+            track_name = os.path.basename(fp)[:-4]
+            track_int = track_name.split('_')[1]
+            try:
+
+                idx = perf_key_meta_list.index(track_int)
+            except ValueError as e:
+                print(e)
+                continue
+
+            gender = gender_meta_list[idx]
+            if 'm' in gender.lower():
+                gender_group_labels_arr.append('male')
+            elif 'f' in gender.lower():
+                gender_group_labels_arr.append('female')
+            else:
+                raise Exception(f'Gender value not recognised for excerpt {track_name} in csv row {idx}')
+
+    gender_group_labels_arr = np.asarray(gender_group_labels_arr)
+    all_labels_arrs.append(gender_group_labels_arr)
+    all_label_names.append('gender')
+    all_labels_class_sizes.append(1)
+    return gender_group_labels_arr
+
+
+def get_vctk_gender():
+    id_list, gender_list = vctk_id_gender_list()
+    gender_group_labels_arr = []
+    for voice_meta in metad_by_singer_list:
+        uttrs_fps = voice_meta[2:]
+        for fp in uttrs_fps:
+            track_name = os.path.basename(fp)[:-4]
+            singer_id = track_name.split('_')[0]
+            idx = id_list.index(singer_id)
+
+            gender = gender_list[idx]
+            if 'm' in gender.lower():
+                gender_group_labels_arr.append('male')
+            elif 'f' in gender.lower():
+                gender_group_labels_arr.append('female')
+            else:
+                raise Exception(f'Gender value not recognised for excerpt {track_name} in csv row {idx}')
+
+    gender_group_labels_arr = np.asarray(gender_group_labels_arr)
+    all_labels_arrs.append(gender_group_labels_arr)
+    all_label_names.append('gender')
+    all_labels_class_sizes.append(1)
+    return gender_group_labels_arr
+
+def get_damp_gender(ignore_unknowns=False, csv_path='/homes/bdoc3/my_data/text_data/damp/intonation_metadata.csv'):
+    """
+    Get entries from gender csv file, return single list of performer-gender tuples
+    """
+
+    f = open(csv_path, 'r')
+    reader = csv.reader(f)
+    header = next(reader)
+    singer_meta = [row for row in reader]
+    if ignore_unknowns:
+        performer_gender_list = [(row[0].split('_')[0], row[8]) for row in singer_meta if row[8] != ' None']
+    else:
+        performer_gender_list = [(row[0].split('_')[0], row[8]) for row in singer_meta]
+
+    return performer_gender_list

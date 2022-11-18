@@ -1,6 +1,5 @@
 import pdb
 import sys
-from turtle import forward
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -221,8 +220,11 @@ class Generator(nn.Module):
         encoder_outputs = torch.cat((code_exp, c_trg.unsqueeze(1).expand(-1,x.size(1),-1)), dim=-1)
         if SVC_model_name == 'defaultName':
             pdb.set_trace()
-        if SVC_pitch_cond: #if pitchCond it activate, concatenate pitch contour with encoder_outputs
-            encoder_outputs = torch.cat((encoder_outputs, pitch_cont), dim=-1)
+        if pitch_cont != None: #if pitchCond it activate, concatenate pitch contour with encoder_outputs
+            try:
+                encoder_outputs = torch.cat((encoder_outputs, pitch_cont), dim=-1)
+            except Exception as e:
+                pdb.set_trace()
         
         mel_outputs, saved_dec_outs = self.decoder(encoder_outputs)
         # then put mel_ouputs through remaining postnet section of NN

@@ -1,12 +1,14 @@
 import os
 
-which_cuda = 1
+which_cuda = 2
 
 use_loader = 'damp'
-feat_type = 'mel'
+feat_type = 'world'
 subset_size = 0.25 # should present a fraction of the dataset
-ds_fn = f'{use_loader}_{feat_type}_Size{str(subset_size)}'
-
+use_aper_feats = True
+if use_aper_feats: apers_string = 'WithApers'
+else: apers_string = ''
+ds_fn = f'{use_loader}_{feat_type}{apers_string}_Size{str(subset_size)}'
 
 # autoSvc training
 use_avg_singer_embs = True
@@ -30,7 +32,7 @@ pitch_dir = '/import/c4dm-02/bdoc3/world_data/damp_80_16ms' #it doesn't matter w
 SIE_pitch_cond = False
 if SIE_pitch_cond: siePitchCond = 'siePitchCond'
 else: siePitchCond = ''
-SVC_pitch_cond = False
+SVC_pitch_cond = True
 if SVC_pitch_cond: svcPitchCond = 'svcPitchCond'
 else: svcPitchCond = ''
 
@@ -50,16 +52,14 @@ SVC_models_dir = '/homes/bdoc3/my_data/autovc_models/autoSvc'
 # SIE_model_path = '/homes/bdoc3/my_data/autovc_models/singer-identity-encoder/autoVc_pretrainedOnVctk_Mels80'
 SIE_model_path = '/homes/bdoc3/my_data/autovc_models/singer-identity-encoder/bestPerformingSIE_mel80'
 # SIE_model_path = '/homes/bdoc3/my_data/autovc_models/singer-identity-encoder/sie_VoxCeleb1LibrispeechDampQianParams_mels80'
-svc_ckpt_path = os.path.join(SVC_models_dir, 'damp_mel_Size0.25-avgEmbs_with-bestPerformingSIE_mel80-', 'ckpt_500000.pt')
-# svc_ckpt_path = ''
+# svc_ckpt_path = os.path.join(SVC_models_dir, 'damp_mel_Size0.25-avgEmbs_CcLoss__-bestPerformingSIE_mel80-to500kIters', 'saved_model.pt')
+svc_ckpt_path = ''
 pkl_fn_extras = ''
-fn_final_notes = 'Cont2'
+fn_final_notes = ''
 
 SVC_model_name = f'{ds_fn}-{training_fn}-{os.path.basename(SIE_model_path)}-{fn_final_notes}'
 # SVC_model_name = 'damp_freq32QuarterDataset_10EmbAverage_patience20Thresh.1-bestPerformingSIE_mel80'
 print('Model name: ', SVC_model_name)
-
-
 
 # fill this out only if you want SVC input features to be different to SIE input features
 SVC_feat_dir = '/import/c4dm-02/bdoc3/world_data/damp_80_16ms'
@@ -67,6 +67,14 @@ SVC_feat_dir = '/import/c4dm-02/bdoc3/world_data/damp_80_16ms'
 SIE_feat_dir = f'/import/c4dm-02/bdoc3/spmel/{use_loader}_qianParams' #always MEL-type if using bestPerformingSIE
 # SVC_feat_dir = '/homes/bdoc3/my_data/spmel_data/vocadito'
 # SIE_feat_dir = SVC_feat_dir
+
+# schedulers
+# ckpt_freq = 1000
+log_step = 10
+max_iters = 500001 #measured in batches, not data examples
+max_cycle_iters = 1000
+ckpt_freq = 500000 #make this number higher than max_iters to avoid ckpts altogether
+spec_freq = 50000
 
 use_ckpt_config = False
 #SVC params
@@ -89,16 +97,9 @@ model_num_layers = 3
 chunk_num = 6
 chunk_seconds = 0.5
 window_timesteps = 128 # Window size does not affect accuracy, just speed of network to converge
-use_aper_feats = False
 midi_range = range(36, 82) # should be the same as used in SIE if trained with pitch conditioning as well
 
-# schedulers
-# ckpt_freq = 1000
-log_step = 10
-max_iters = 1000000 #measured in batches, not data examples
-max_cycle_iters = 1000
-ckpt_freq = 1000000 #make this number higher than max_iters to avoid ckpts altogether
-spec_freq = 50000
+
 
 
 

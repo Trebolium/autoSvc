@@ -239,15 +239,17 @@ class AutoSvc(object):
 
                 recon_loss = (prnt_loss_weight * g_loss_id_prnt) + (psnt_loss_weight * g_loss_id_psnt)
                 total_loss = recon_loss
-
+                all_losses = [recon_loss]
                 
                 # Code semantic loss. For calculating this, there is no target embedding
                 code_reconst = self.G(x_identic_psnt, emb_org, None)
                 # gets the l1 loss between original encoder output and reconstructed encoder output
-                g_loss_cd = F.l1_loss(code_real, code_reconst)
-                cc_loss = (code_loss_weight * g_loss_cd)
+
                 if include_code_loss:
+                    g_loss_cd = F.l1_loss(code_real, code_reconst)
+                    cc_loss = (code_loss_weight * g_loss_cd)
                     total_loss += cc_loss
+                    all_losses.append(cc_loss)
 
                 """
                 Uncomment block below when you've addressed the following
@@ -266,12 +268,13 @@ class AutoSvc(object):
                 #     self.vclass_optim
                 #     total_loss += confusion_pred_loss
 
-
-                cc_emb = self.sie(x_identic_psnt)
-                cc_emb_loss = F.l1_loss(emb_org, cc_emb)
-                cc_emb_loss = cc_emb_loss.detach().clone() # we don't want this loss to backprop through self.sie
+                # pdb.set_trace()
                 if use_emb_loss:
+                    cc_emb = self.sie(x_identic_psnt)
+                    cc_emb_loss = F.l1_loss(emb_org, cc_emb)
+                    cc_emb_loss = cc_emb_loss.detach().clone() # we don't want this loss to backprop through self.sie
                     total_loss += cc_emb_loss
+                    all_losses.append(cc_emb_loss)
 
                 ########## OLD LOSS VERSION ^^^
                 # remember that l1_loss gives you mean over batch, unless specificed otherwise
@@ -287,9 +290,10 @@ class AutoSvc(object):
                         feat_npys = [np.rot90(onehot_midi_npy[0]), np.rot90(SIE_feats_npy[0]),
                                     np.rot90(SVC_feats_npy[0]), np.rot90(x_identic_prnt.cpu().data.numpy()[0])]
                         self.plot_comparisons(feat_npys, self.train_latest_step) 
-
-                all_losses = [recon_loss, cc_loss, cc_emb_loss, total_loss]
-                assert len(all_losses) == len(self.loss_names) and len(all_losses) == len(interlog_losses_dict)
+                
+                all_losses.append(total_loss)
+                # all_losses = [recon_loss, cc_loss, cc_emb_loss, total_loss]
+                # assert len(all_losses) == len(self.loss_names) and len(all_losses) == len(interlog_losses_dict)
                 for j in range(len(all_losses)):
                     key = self.loss_names[j]
                     interlog_losses_dict[key] += float(all_losses[j])
