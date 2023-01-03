@@ -20,7 +20,7 @@ class DuoFeatureDataset(Dataset):
     def __init__(self, feats1_num_feats,
                        feats2_num_feats,
                        subset_name, ds_size,
-                       this_train_params=None): 
+                       this_train_params=None, chosen_class_num=None): 
 
         if this_train_params==None:
             self.SIE_feat_dir = SIE_feat_dir
@@ -42,17 +42,27 @@ class DuoFeatureDataset(Dataset):
             self.midi_range = this_train_params['midi_range']
 
         self.ext = '.npy'
-        if ds_size == 1.0:
+
+        # FIXME: Much better mechanism to use than dataset percentage option as this is truly adaptable, random, doesn't require making more dirs
+        if chosen_class_num != None:
             feats1_subset_dir = os.path.join(self.SIE_feat_dir, subset_name)
-            _, feats1_fps = recursive_file_retrieval(feats1_subset_dir, ignore_hidden_dirs=True)
-            numpy_fns = [os.path.basename(fp) for fp in sorted(feats1_fps) if fp.endswith(self.ext) and not fp.startswith('.')]
+            # pdb.set_trace()
+            dir_paths, feats1_fps = recursive_file_retrieval(feats1_subset_dir, ignore_hidden_dirs=True, return_parent=False)
+            subdirs = random.sample([os.path.basename(dir_path) for dir_path in dir_paths], chosen_class_num)
+            feats1_fps = [fp for fp in feats1_fps if os.path.basename(fp).split('_')[0] in subdirs]
+
         else:
-            feats1_subset_dir = os.path.join(self.SIE_feat_dir, subset_name, f'.{ds_size}_size')
-            if not os.path.exists(feats1_subset_dir):
-                pdb.set_trace()
-                raise Exception
-            _, feats1_fps = recursive_file_retrieval(feats1_subset_dir)
-            numpy_fns = [os.path.basename(fp) for fp in sorted(feats1_fps) if fp.endswith(self.ext) and not fp.startswith('.')]            
+            if ds_size == 1.0:
+                feats1_subset_dir = os.path.join(self.SIE_feat_dir, subset_name)
+                _, feats1_fps = recursive_file_retrieval(feats1_subset_dir, ignore_hidden_dirs=True)
+            else:
+                feats1_subset_dir = os.path.join(self.SIE_feat_dir, subset_name, f'.{ds_size}_size')
+                if not os.path.exists(feats1_subset_dir):
+                    pdb.set_trace()
+                    raise Exception
+                _, feats1_fps = recursive_file_retrieval(feats1_subset_dir)
+
+        numpy_fns = [os.path.basename(fp) for fp in sorted(feats1_fps) if fp.endswith(self.ext) and not fp.startswith('.')] 
         
         if self.norm_method == 'schluter':
             self.f1_total_mean, self.f1_total_std = get_norm_stats(os.path.join(self.SIE_feat_dir +'train'))
@@ -198,7 +208,7 @@ class DuoFeatureDataset(Dataset):
 
 
 "Load the primary dataloader"
-def load_primary_dataloader(SIE_feats_params, subset_name, SVC_feats_params, ds_size, bs=None, workers=None, this_train_params=None):
+def load_primary_dataloader(SIE_feats_params, subset_name, SVC_feats_params, ds_size, chosen_class_num, bs=None, workers=None, this_train_params=None):
 
     # pdb.set_trace()
     if bs == None: batch_size = batch_size
@@ -207,9 +217,9 @@ def load_primary_dataloader(SIE_feats_params, subset_name, SVC_feats_params, ds_
     else: num_workers = workers
 
     if this_train_params == None:
-        dataset = DuoFeatureDataset(SIE_feats_params['num_feats'], SVC_feats_params['num_feats'], subset_name, ds_size)
+        dataset = DuoFeatureDataset(SIE_feats_params['num_feats'], SVC_feats_params['num_feats'], subset_name, ds_size, chosen_class_num)
     else:
-        dataset = DuoFeatureDataset(SIE_feats_params['num_feats'], SVC_feats_params['num_feats'], subset_name, ds_size, this_train_params)
+        dataset = DuoFeatureDataset(SIE_feats_params['num_feats'], SVC_feats_params['num_feats'], subset_name, ds_size, this_train_params, chosen_class_num)
 
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True, num_workers=num_workers)
     return dataset, loader

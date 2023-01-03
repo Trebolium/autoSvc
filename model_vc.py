@@ -241,19 +241,29 @@ class Generator(nn.Module):
         return mel_outputs, mel_outputs_postnet, torch.cat(codes, dim=-1), saved_enc_outs, saved_dec_outs
 
 class Aux_Voice_Classifier(nn.Module):
-    def __init__(self, input_dim, class_num):
+    def __init__(self, input_dim, layer_out_sizes, class_num):
         super(Aux_Voice_Classifier, self).__init__()
 
-        self.fc1 = nn.Sequential(nn.Linear(input_dim, input_dim//2),
-                                 nn.BatchNorm1d(input_dim//2),
-                                 nn.ReLU()
-                                 )
-        self.classlayer = nn.Linear(input_dim//2, class_num)
+        self.fc_layers = nn.ModuleList()
+        for layer_out_size in layer_out_sizes:
+            fc_layer = nn.Sequential(nn.Linear(input_dim, layer_out_size),
+                                    nn.BatchNorm1d(layer_out_size),
+                                    nn.ReLU()
+                                    )
+            self.fc_layers.append(fc_layer)
+            input_dim = layer_out_size
+
+        # self.fc1 = nn.Sequential(nn.Linear(input_dim, input_dim//2),
+        #                          nn.BatchNorm1d(input_dim//2),
+        #                          nn.ReLU()
+        #                          )
+        self.classlayer = nn.Linear(input_dim, class_num)
 
     def forward(self, x):
         x.flatten()
-        x1 = self.fc1(x)
-        prediction = torch.sigmoid(self.classlayer(x1))
+        for fc_layer in self.fc_layers:
+            x = fc_layer(x)
+        prediction = torch.sigmoid(self.classlayer(x))
         return prediction
 
 

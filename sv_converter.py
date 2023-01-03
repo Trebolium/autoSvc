@@ -238,7 +238,7 @@ class AutoSvc(object):
                 g_loss_id_psnt = F.l1_loss(SVC_input, x_identic_psnt)   
 
                 recon_loss = (prnt_loss_weight * g_loss_id_prnt) + (psnt_loss_weight * g_loss_id_psnt)
-                total_loss = recon_loss
+                total_loss = recon_loss.clone()
                 all_losses = [recon_loss]
                 
                 # Code semantic loss. For calculating this, there is no target embedding
@@ -248,8 +248,10 @@ class AutoSvc(object):
                 if include_code_loss:
                     g_loss_cd = F.l1_loss(code_real, code_reconst)
                     cc_loss = (code_loss_weight * g_loss_cd)
-                    total_loss += cc_loss
-                    all_losses.append(cc_loss)
+                else:
+                    cc_loss = 0
+                total_loss += cc_loss
+                all_losses.append(cc_loss)
 
                 """
                 Uncomment block below when you've addressed the following
@@ -273,8 +275,10 @@ class AutoSvc(object):
                     cc_emb = self.sie(x_identic_psnt)
                     cc_emb_loss = F.l1_loss(emb_org, cc_emb)
                     cc_emb_loss = cc_emb_loss.detach().clone() # we don't want this loss to backprop through self.sie
-                    total_loss += cc_emb_loss
-                    all_losses.append(cc_emb_loss)
+                else:
+                    cc_emb_loss = 0
+                total_loss += cc_emb_loss
+                all_losses.append(cc_emb_loss)
 
                 ########## OLD LOSS VERSION ^^^
                 # remember that l1_loss gives you mean over batch, unless specificed otherwise
