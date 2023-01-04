@@ -1,4 +1,4 @@
-import os, shutil, yaml, torch, pickle, pdb, csv
+import os, shutil, yaml, torch, pickle, pdb, csv, random
 from shutil import copyfile
 from model_sie import SingerIdEncoder
 from collections import OrderedDict
@@ -14,11 +14,15 @@ import soundfile as sf
 from my_audio.world import mfsc_to_world_to_audio
 from my_audio.pitch import midi_as_onehot
 from neural.model_mod import checkpoint_model_optim_keys
-from my_os import overwrite_dir
+from my_os import overwrite_dir, recursive_file_retrieval
+from my_arrays import fix_feat_length, container_to_tensor, tensor_to_array, find_runs
+
+
+
 
 
 """Convert world pitch info to 1hot midi"""
-def get_onehot_midi(midi_voicing, midi_range):
+def cont_to_onehot_midi(midi_voicing, midi_range):
 
     midi_contour = midi_voicing[:,0]
     unvoiced = midi_voicing[:,1].astype(int) == 1 # remove the interpretted values generated because of unvoiced sections
