@@ -1,9 +1,7 @@
 import random, os, pdb, sys
 import numpy as np
 import utils
-
-sys.path.insert(1, '/homes/bdoc3/my_utils')
-from my_arrays import fix_feat_length, container_to_tensor, tensor_to_array, find_runs
+from my_arrays import fix_feat_length, container_to_tensor, find_runs
 from my_os import recursive_file_retrieval
 from my_audio.pitch import midi_as_onehot
 
@@ -42,17 +40,14 @@ def get_fn_string(src_fn, trg_fn, src_rand_ts, model_str, gen_pair):
     return model_str +f'_{src_str}' +f'_timestep{src_rand_ts}' +f'_{trg_str}'
 
 
-def pitch_matched_src_trg(src_gender, trg_gender, this_train_params, gender_separated_lists, voiced_percent_tolerance=0.6):
+def pitch_matched_src_trg(src_gender, trg_gender, this_train_params, gender_separated_lists, subset, voiced_percent_tolerance=0.6):
 
     matching_target_found = False
     while not matching_target_found:
-        src_path, src_rand_gend_int = get_song_path(src_gender, gender_separated_lists, this_train_params.SVC_data_dir)
-    #     src_path = '/import/c4dm-02/bdoc3/spmel/damp_qianParams/test/434587164/434587164_2141814685.npy'
-
-        src_spec_feats, src_pitch_feats = get_feats(src_path)
-
+        
+        src_path, src_rand_gend_int = get_song_path(src_gender, gender_separated_lists, os.path.join(this_train_params.SVC_feat_dir, subset))
+        src_spec_feats, src_pitch_feats = get_feats(src_path, this_train_params.pitch_dir, subset, this_train_params.midi_range)
         src_rand_ts = random.randint(0, len(src_spec_feats)-this_train_params.window_timesteps-1)
-    #     src_rand_ts = 2981
 
         src_spec_clip, _ = fix_feat_length(src_spec_feats, this_train_params.window_timesteps, offset=src_rand_ts)
         src_pitch_clip, _ = fix_feat_length(src_pitch_feats, this_train_params.window_timesteps, offset=src_rand_ts)
@@ -69,6 +64,9 @@ def pitch_matched_src_trg(src_gender, trg_gender, this_train_params, gender_sepa
             spec_pitch_gendint_randts_path = matching_pitch_clip(trg_gender,
                                                      avg_src_pitch,
                                                      src_path,
+                                                     this_train_params,
+                                                     subset,
+                                                     gender_separated_lists,
                                                      voiced_percent_tolerance=voiced_percent_tolerance)
 
             trg_spec_clip, trg_pitch_clip, trg_rand_gend_int, trg_rand_ts, trg_path = spec_pitch_gendint_randts_path
@@ -102,7 +100,7 @@ def get_song_path(gender, gender_separated_lists, SVC_data_dir):
     return song_path, rand_int
 
 
-def get_feats(path):
+def get_feats(path, pitch_dir, subset, midi_range):
     spec_feats = np.load(path)
     fn = os.path.basename(path)
     world_feats = np.load(os.path.join(pitch_dir, subset, fn.split('_')[0], fn))
@@ -111,24 +109,59 @@ def get_feats(path):
     unvoiced = pitches[:,1].astype(int) == 1
     midi_contour[unvoiced] = 0
     pitch_feats = midi_contour
-    pitch_feats = midi_as_onehot(pitch_feats, this_train_params.midi_range)
+    pitch_feats = midi_as_onehot(pitch_feats, midi_range)
     return spec_feats, pitch_feats
 
 
+def get_relevant_avg_pitches(continuous_pitch_feats, window_size, irrelenvant_ind=0):
+    average_pitches = []
+    for idx in range(len(continuous_pitch_feats)-window_size):
+        avging_window = continuous_pitch_feats[idx:idx+window_size]
+        voiced_window = avging_window!=0
+
+        if sum(voiced_window) != irrelenvant_ind:
+            window_average = round(np.average(avging_window[voiced_window]))
+        else:
+            window_average = 0
+
+        average_pitches.append(window_average)
+
+    average_pitches = np.asarray(average_pitches)
+    average_pitches = np.concatenate((average_pitches, np.zeros((window_size))))
+    return average_pitches
 
 
-def matching_pitch_clip(trg_gender, avg_src_pitch, src_path, track_search_tolerance=10, voiced_percent_tolerance=0.7):
+def best_pitch_matching_idx(average_trg_pitches, ref_pitch, tolerance=2, min_avg_pitch_dur=10):
+
+    above_lower = average_trg_pitches > (ref_pitch - tolerance)
+    below_upper = average_trg_pitches < (ref_pitch + tolerance)
+    within_range_pitches = above_lower & below_upper
+    eligible_run_indices = []
+    vals, starts, lengths = find_runs(within_range_pitches)
+    # for chunks of True in boolean array, if length is long enough, save in list
+    for i in range(len(vals)):
+        if vals[i]:
+            if lengths[i] >= min_avg_pitch_dur:
+                eligible_run_indices.append(i)
+    if len(eligible_run_indices) == 0:
+        return -1
+    else:
+        chosen_run_idx = random.choice(eligible_run_indices)
+        return starts[i]
+
+
+def matching_pitch_clip(trg_gender, avg_src_pitch, src_path, this_train_params, subset, gender_separated_lists, track_search_tolerance=10, voiced_percent_tolerance=0.7):
     
     matched_singer_found = False
     attempt_num = 0
     while matched_singer_found==False:
         
-        trg_path, trg_rand_gend_int = get_song_path(trg_gender)
+        trg_path, trg_rand_gend_int = get_song_path(trg_gender, gender_separated_lists, os.path.join(this_train_params.SVC_feat_dir, subset))
         if os.path.dirname(trg_path) == os.path.dirname(src_path):
             continue
     
         print(f'attempt num: {attempt_num}, candidate_song: {os.path.basename(trg_path)}')
-        trg_spec_feats, trg_pitch_feats = get_feats(trg_path)
+        trg_spec_feats, trg_pitch_feats = get_feats(trg_path, this_train_params.pitch_dir, subset, this_train_params.midi_range)
         continuous_pitch_feats = np.argmax(trg_pitch_feats, axis=1)
         average_trg_pitches = get_relevant_avg_pitches(continuous_pitch_feats, this_train_params.window_timesteps)
         start_of_chunk_idx = best_pitch_matching_idx(average_trg_pitches, avg_src_pitch)
@@ -137,6 +170,7 @@ def matching_pitch_clip(trg_gender, avg_src_pitch, src_path, track_search_tolera
             trg_pitch_clip, _ = fix_feat_length(trg_pitch_feats, this_train_params.window_timesteps, offset=start_of_chunk_idx)
             voiced = np.argmax(trg_pitch_clip, axis=1) != 0
             if (sum(voiced) / len(voiced)) < voiced_percent_tolerance:
+                print('target audio didn\'t have enough voiced in it.')
                 continue
             matched_singer_found = True
             break
@@ -144,7 +178,7 @@ def matching_pitch_clip(trg_gender, avg_src_pitch, src_path, track_search_tolera
         attempt_num += 1
         if attempt_num >= track_search_tolerance:
             raise NoMatchError(f'No matching pitches after searching {attempt_num} target candidates' )
-            
+    
     trg_spec_clip, _ = fix_feat_length(trg_spec_feats, this_train_params.window_timesteps, offset=start_of_chunk_idx)
     
     return trg_spec_clip, trg_pitch_clip, trg_rand_gend_int, start_of_chunk_idx, trg_path
