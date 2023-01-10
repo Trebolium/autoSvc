@@ -161,12 +161,6 @@ for i in range(num_listening_studies):
 #             pdb.set_trace()
             converted_sie_emb = tensor_to_array(SIE(converted_feats.squeeze(1)))
             trg_emb_arr = tensor_to_array(trg_emb_tns)
-            # sims = []
-            # dists = []
-            # for l in range(len(subset_metadata)):
-            #     entry = subset_metadata[l]
-            #     s_id = entry[0]
-            #     s_emb = entry[2]
             cosine_sim = np.dot(converted_sie_emb, trg_emb_arr)/(norm(converted_sie_emb) * norm(trg_emb_arr))
             print(cosine_sim)
             if cosine_sim > 1:
@@ -175,5 +169,5 @@ for i in range(num_listening_studies):
             results_condition.append((cosine_sim, euclidean_distance, (j, model_name), (k, (src_gender, trg_gender))))
 
 # with open('conversion_cosine_results.pkl', 'wb') as handle:
-with open('deletable.pkl', 'wb') as handle:
+with open('conversion_cosine_results.pkl', 'wb') as handle:
     pickle.dump(results_condition, handle, protocol=pickle.HIGHEST_PROTOCOL)
