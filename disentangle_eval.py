@@ -14,6 +14,8 @@ from torch.utils.tensorboard import SummaryWriter
 from data_objects.data_loaders import load_primary_dataloader
 from neural.eval import get_accuracy
 
+which_cuda = 2 #when you change this, make sure synthesis.py's device is set to same
+
 # svc_model_name = 'damp_mel_Size0.25-avgEmbs_withCcLoss-autoVc_pretrainedOnVctk_Mels80-'
 # svc_model_name = 'damp_mel_Size0.25-avgEmbs_with-bestPerformingSIE_mel80-'
 # svc_model_name = 'damp_mel_Size0.25-avgEmbs_EmbLoss__-bestPerformingSIE_mel80-Cont2'
@@ -23,11 +25,11 @@ svc_model_name = 'damp_mel_Size0.25-avgEmbs_CcLoss__-bestPerformingSIE_mel80-to5
 sie_model_name = 'bestPerformingSIE_mel80'
 testing_with = 'bneck'
 use_avg_embs = True
-extra_note = 'TestSet100Singers'
+extra_note = 'TestSet20Singers_500kIters'
 
 test_on = 'damp'
-ds_size = 0.0078
-chosen_class_num = 100 # if this parameter is a number, this overwrites the functionality of ds_size as it specifies the number of singers to use from the subset.
+ds_size = None
+chosen_class_num = 20 # if this parameter is not None and an int, this overwrites the functionality of ds_size as it specifies the number of singers to use from the subset.
 ex_per_spkr = 2
 num_epochs = 600
 
@@ -37,7 +39,6 @@ else: emb_type = 'live_'
 vc_verion = 'autoSvc'
 SVC_feat_dir = f'/import/c4dm-02/bdoc3/spmel/{test_on}_qianParams'
 SIE_feat_dir = f'/import/c4dm-02/bdoc3/spmel/{test_on}_qianParams'
-which_cuda = 1 #when you change this, make sure synthesis.py's device is set to same
 subset = 'test'
 device = f'cuda:{which_cuda}'
 SVC_pitch_cond = False
@@ -58,7 +59,7 @@ metadata_root_dir = '/homes/bdoc3/my_data/voice_embs_visuals_metadata'
 SIE_dataset_name = os.path.basename(SIE_feat_dir)
 # SVC_dataset_name = os.path.basename(SVC_feat_dir)
 this_svc_model_dir = os.path.join(saved_models_dir, os.path.basename(vc_verion), svc_model_name)
-checkpoint_path = os.path.join(this_svc_model_dir, 'saved_model.pt')
+checkpoint_path = os.path.join(this_svc_model_dir, 'ckpt_500000.pt')
 SIE_path =  os.path.join(saved_models_dir, os.path.basename(sie_dir), sie_model_name)
 
 ### MODELS

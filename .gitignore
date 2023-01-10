@@ -6,3 +6,4 @@ notebooks/
 alternative_runs/
 .ipynb_checkpoints/
 *.pyc
+*.pkl
