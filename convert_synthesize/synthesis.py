@@ -16,8 +16,8 @@ use_cuda = torch.cuda.is_available()
 device = torch.device("cuda:0" if use_cuda else "cpu")
 torch.cuda.set_device(device)
 
+
 def build_model():
-    
     model = getattr(builder, hparams.builder)(
         out_channels=hparams.out_channels,
         layers=hparams.layers,
@@ -40,15 +40,12 @@ def build_model():
     return model
 
 
-
 def wavegen(model, which_cuda, c=None, tqdm=tqdm):
-    """Generate waveform samples by WaveNet.
-    
-    """
+    """Generate waveform samples by WaveNet."""
 
     model.eval()
     model.make_generation_fast_()
-    device = torch.device(f'cuda:{which_cuda}')
+    device = torch.device(f"cuda:{which_cuda}")
     Tc = c.shape[0]
     upsample_factor = hparams.hop_size
     # Overwrite length according to feature size
@@ -62,11 +59,18 @@ def wavegen(model, which_cuda, c=None, tqdm=tqdm):
     initial_input = initial_input.to(device)
     c = None if c is None else c.to(device)
 
-    #test
+    # test
     with torch.no_grad():
         y_hat = model.incremental_forward(
-            initial_input, c=c, g=None, T=length, tqdm=tqdm, softmax=True, quantize=True,
-            log_scale_min=hparams.log_scale_min)
+            initial_input,
+            c=c,
+            g=None,
+            T=length,
+            tqdm=tqdm,
+            softmax=True,
+            quantize=True,
+            log_scale_min=hparams.log_scale_min,
+        )
 
     y_hat = y_hat.view(-1).cpu().data.numpy()
 
