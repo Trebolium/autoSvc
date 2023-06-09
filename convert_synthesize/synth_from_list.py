@@ -1,4 +1,4 @@
-import sys, os, pdb, pickle, argparse, shutil, yaml, torch, random, pickle, csv, librosa
+import os, pickle, argparse, shutil, yaml, torch, random, pickle, csv, librosa
 os.system('module load ffmpeg')
 from torch.backends import cudnn
 import matplotlib.pyplot as plt
@@ -8,20 +8,15 @@ import librosa
 import soundfile as sf
 from tqdm import tqdm
 
-sys.path.insert(1, '/homes/bdoc3/my_utils')
-import utils
-from model_sie import SingerIdEncoder
-from collections import OrderedDict
-from my_container import str2bool
-from my_audio.world import get_world_feats
-from my_audio.mel import audio_to_mel_autovc, db_normalize
-from my_audio.pitch import midi_as_onehot
+import sys
+if os.path.abspath('../my_utils') not in sys.path: sys.path.insert(1, os.path.abspath('../my_utils'))
 from my_arrays import fix_feat_length
-from my_normalise import norm_feat_arr, get_norm_stats
 from my_os import recursive_file_retrieval
 from my_interaction import binary_answer
 
-
+import utils
+from model_sie import SingerIdEncoder
+from collections import OrderedDict
 
 
 
@@ -93,7 +88,6 @@ SVC_feat_params, SVC_num_used_feats = gen_feat_params(SVC_feat_dir)
 
 print('gathering audio paths for conversion...')
 
-# fp_gender_list = pickle.load(open(os.path.join(SVC_feat_dir, 'test_examples.pkl'), 'rb'))
 fp_gender_list = []
 f = open(use_loader +f'_{config.subset}_examples.csv', 'r')
 reader = csv.reader(f)
@@ -150,8 +144,8 @@ for i, entry in enumerate(fp_gender_list):
     feat_list.append((singer_id, midi_contour_npy, SVC_input_feats_npy, SIE_input_feats_npy, aper_feats_npy))
     try:
         y, _ = librosa.load(audio_list[i], sr=SVC_feat_params['sr'])
-    except:
-        pdb.set_trace()
+    except Exception as e:
+        print(e)
     start_sample = int(start_step * hop_size)
     end_sample = int((start_step + window_timesteps) * hop_size)
     # print(y.shape, start_sample, end_sample)

@@ -1,22 +1,28 @@
 # Uses metadata_for_synth.pkl to synthesize/convert audio
 
-import time, sys, os, pdb, pickle, argparse, shutil, yaml, torch, math, time, random, pickle
+import pdb, argparse, yaml, torch, random, librosa
 from torch.backends import cudnn
-import matplotlib.pyplot as plt
 import numpy as np
-import torch.nn.functional as F
 from model_sie import SingerIdEncoder
 from collections import OrderedDict
 
-from my_utils.my_os import recursive_file_retrieval
-
-sys.path.insert(1, '/homes/bdoc3/my_utils')
+import sys, os
+if os.path.abspath('../my_utils') not in sys.path: sys.path.insert(1, os.path.abspath('../my_utils'))
+from my_os import recursive_file_retrieval
 from my_container import str2bool
 from my_audio.world import get_world_feats
 from my_audio.mel import audio_to_mel_autovc, db_normalize
 from my_audio.pitch import midi_as_onehot
 from my_arrays import fix_feat_length
-from my_normalise import norm_feat_arr, get_norm_stats
+
+
+"""
+
+This script gets list of audio from audio_dir argument
+and uses params from the autosvc model's train_params file to generate a list of features
+
+"""
+
 
 def str2bool(v):
     return v.lower() in ('true')
@@ -66,8 +72,9 @@ if __name__ == '__main__':
     parser.add_argument('-um','--use_model', type=str, default='worldHarmsOnly_pitchCond_Window608', help='name the model used for inferring')
     parser.add_argument('-wc','--which_cuda', type=int, default=0, help='Determine which cuda to use')
     parser.add_argument('c','--convert', type=str2bool, default=True)
-
     inputs = parser.parse_args()
+
+    # setup variables
     which_cuda = inputs.which_cuda
     cudnn.benchmark = True
     convert_style = inputs.convert_style
@@ -81,8 +88,6 @@ if __name__ == '__main__':
     sys.path.insert(1, autovc_model_dir)
     from this_train_params import *
     from this_model_vc import Generator
-    from this_sv_converter import AutoSvc
-    import this_utils
 
 
     #setup models
@@ -97,38 +102,35 @@ if __name__ == '__main__':
     SIE = utils.setup_sie(SIE_path, device)
     G = utils.setup_gen(Generator, num_spectral_feats)
 
-    import torch
-    import librosa
-    import soundfile as sf
-    import pickle
     from synthesis import build_model
     from synthesis import wavegen
-
     model = build_model().to(device)
-
-    # sys.path.insert(1, '/homes/bdoc3/my_data/autovc_models') # usually the cwd is priority, so index 1 is good enough for our purposes here
-    # from hparams import hparams
     checkpoint = torch.load("/homes/bdoc3/my_data/autovc_models/checkpoint_step001000000_ema.pth")
     model.load_state_dict(checkpoint["state_dict"])
     model.to(device)
 
+
+    # create a list with only one example per singer
     _, singer_list = recursive_file_retrieval(inputs.audio_dir)
     singer_set = {}
     random.shuffle(singer_list)
     for fp in singer_list:
-        if os.path.basename(fp).split('_')[0] not in singer_set:
-            singer_set.add(os.path.basename(fp).split('_')[0])
-        else:
-            singer_list.remove(fp)   
-    assert len(singer_list) == len(singer_set)
+        singer_id = os.path.basename(fp).split('_')[0]
+        if singer_id not in singer_set:
+            singer_set.add(singer_id)
+    single_singer_list = list(singer_set)
 
+
+    # create mel objects
     if inputs.feat_type == 'mel':
         mel_filter = mel(feat_params['sr'], feat_params['fft_size'], fmin=feat_params['fmin'], fmax=feat_params['fmax'], n_mels=feat_params['num_harm_feats']).T
-        # self.mel_filter = mel(16000, 1024, fmin=90, fmax=7600, n_mels=80).T
         min_level = np.exp(-100 / 20 * np.log(10))
         hop_size = int((feat_params['frame_dur_ms']/1000) * feat_params['sr'])
 
-    for sp in singer_list:
+
+    # get feats from singer paths
+    feat_list = []
+    for sp in single_singer_list:
         fn = os.path.basename(sp)
         singer_id = fn.split('_')[0]
         y, samplerate = librosa.load(sp, sr=feat_params['sr'])
@@ -144,9 +146,11 @@ if __name__ == '__main__':
         if not use_aper_feats:
             feats = feats[:,:-(feat_params['num_aper_feats'])]
 
+
+        # find pitch features, convert to onehot midi
         if SVC_pitch_cond:
             
-            # find corresponding file from pitch dir and return pitch_predictions
+            # find pitch features
             for subset in ['dev', 'test', 'train', None]:
                 if subset == None:
                     raise FileNotFoundError(f'Target file {fn} could not be found in pitch directory {pitch_dir}')
@@ -156,8 +160,7 @@ if __name__ == '__main__':
                     break
             
             midi_contour = pitch_pred[:,0]
-            # remove the interpretted values generated because of unvoiced sections
-            unvoiced = pitch_pred[:,1].astype(int) == 1
+            unvoiced = pitch_pred[:,1].astype(int) == 1 # remove the interpretted values generated because of unvoiced sections
             midi_contour[unvoiced] = 0
             
             try:

@@ -1,4 +1,5 @@
 __pycache__/
+autosvc_models/
 runs/
 nohup_logs/
 generated_audio/

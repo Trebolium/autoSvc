@@ -8,7 +8,8 @@ import librosa
 import soundfile as sf
 from tqdm import tqdm
 
-sys.path.insert(1, '/homes/bdoc3/my_utils')
+import sys, os
+if os.path.abspath('../my_utils') not in sys.path: sys.path.insert(1, os.path.abspath('../my_utils'))
 import utils
 from model_sie import SingerIdEncoder
 from collections import OrderedDict

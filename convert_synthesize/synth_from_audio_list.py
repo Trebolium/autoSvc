@@ -9,7 +9,8 @@ from librosa.filters import mel
 import soundfile as sf
 from tqdm import tqdm
 
-sys.path.insert(1, '/homes/bdoc3/my_utils')
+import sys, os
+if os.path.abspath('../my_utils') not in sys.path: sys.path.insert(1, os.path.abspath('../my_utils'))
 import utils
 from model_sie import SingerIdEncoder
 from collections import OrderedDict
@@ -18,13 +19,28 @@ from my_audio.mel import audio_to_mel_autovc
 from my_os import recursive_file_retrieval
 from synth_params import *
 
+"""
+
+This script uses:
+Variables from the synth_params file,
+A csv file that contains the file_name (singer/song ID), gender and timestep index
+
+It does the following:
+Finds the relevant chunk of the desired audio file using the csv file
+COnverts these to features
+Saves a plot of these features as figures
+Uses wavenet to convert features back to audio
+
+"""
+
 parser = argparse.ArgumentParser()
-parser.add_argument('-ad','--audio_dir', type=str, default='/homes/bdoc3/my_data/audio_data/damp_desilenced_concat', help='name the model used for inferring')
+parser.add_argument('-ad','--audio_dir', type=str, default='../singer-identity-encoder/example_feats/train', help='name the model used for inferring')
 parser.add_argument('-ft','--feat_type', type=str, default='mel', help='name the model used for inferring')
 parser.add_argument('-ae','--audio_ext', type=str, default='.m4a', help='name the model used for inferring')
 parser.add_argument('-wc','--which_cuda', type=int, default=0, help='Determine which cuda to use')
 
 config = parser.parse_args()
+
 
 print('setting up variables...')
 which_cuda = config.which_cuda
@@ -38,6 +54,7 @@ mel_filter = mel(feat_params['sr'], feat_params['fft_size'], fmin=feat_params['f
 min_level = np.exp(-100 / 20 * np.log(10))
 hop_size = int(feat_params['sr'] * (feat_params['frame_dur_ms']/1000))
 
+
 print('getting selected files from csv...')
 fp_gender_list = []
 f = open(use_loader +'_test_examples.csv', 'r')
@@ -45,26 +62,27 @@ reader = csv.reader(f)
 header = next(reader)
 fp_gender_list = [row for row in reader]
 
+
 print('find and list the audio files associated with these files...')
 _, audio_fps = recursive_file_retrieval(config.audio_dir)
-audio_fps = [fp for fp in audio_fps if fp.endswith(config.audio_ext) and not fp.startswith('.')]
+audio_fps = [fp for fp in os.path.abspath(audio_fps) if fp.endswith(config.audio_ext) and not fp.startswith('.')]
 audio_list = []
 for entry in fp_gender_list:
-    fp = entry[0]
-    fn = os.path.basename(fp)[:-4]
+    fn = entry[0]
     for afp in audio_fps:
         afn = os.path.basename(afp)[:-len(config.audio_ext)]
         if fn == afn:
             audio_list.append(afp)
+            break
+
 
 print('selecting audio chunks...')
 audio_chunk_list = []
 random.seed(0)
 for i, entry in enumerate(fp_gender_list):
-    fp = entry[0]
+    fn = entry[0]
     gender = entry[1]
-    fn = os.path.basename(fp)
-    singer_id = gender +'-' +fn[:-4] +'_' +str(int(int(entry[2])*feat_params['frame_dur_ms']/1000)) +'s'
+    singer_id = gender +'-' +fn +'_' +str(int(int(entry[2])*feat_params['frame_dur_ms']/1000)) +'s'
     
     y, _ = librosa.load(audio_list[i], sr=feat_params['sr'])
     start_sample = int(int(entry[2]) * hop_size)
@@ -74,7 +92,6 @@ for i, entry in enumerate(fp_gender_list):
 
     if config.feat_type == 'mel':
         final_feats = audio_to_mel_autovc(y_chunk, feat_params['fft_size'], hop_size, mel_filter)
-        # final_feats = db_normalize(db_unnormed_melspec, min_level)
         audio_chunk_list.append((singer_id, final_feats))
 
     elif config.feat_type == 'world':
@@ -87,9 +104,9 @@ for i, entry in enumerate(fp_gender_list):
         audio_chunk_list.append((singer_id, harms, apers, onehot_midi))
     
 
-wav_dir = os.path.join('/homes/bdoc3/s/autoSvc/generated_audio', svc_model_name)
+wav_dir = os.path.join('../generated_audio', svc_model_name)
 if not os.path.exists(wav_dir):
-    os.mkdir(wav_dir)
+    os.makedirs(wav_dir)
 
 print('saving plots of features')
 plt.figure(figsize=(20,5))

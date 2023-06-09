@@ -1,16 +1,20 @@
+import datetime
+import math
 from model_vc import Aux_Voice_Classifier
-from torch.utils.tensorboard import SummaryWriter
-import torch
-import os, time, datetime, math, pdb, pickle
 import numpy as np
+import os
+import pdb
+import pickle
+import sys
 import torch.nn.functional as F
+from torch.utils.tensorboard import SummaryWriter
 from neural.scheduler import EarlyStopping
-from train_params import *
 from my_plot import array_to_img
 from my_os import recursive_file_retrieval
 import utils
+from train_params import *
 
-# SOLVER IS THE MAIN SETUP FOR THE NN ARCHITECTURE. INSIDE SOLVER IS THE GENERATOR (G)
+
 class AutoSvc(object):
 
     def __init__(self, SIE_params, SVC_params):
@@ -31,7 +35,6 @@ class AutoSvc(object):
         self.use_cuda = torch.cuda.is_available()
         self.device = torch.device(f'cuda:{which_cuda}' if self.use_cuda else 'cpu')
         self.loss_device = torch.device("cpu")
-        metadata_path = '/homes/bdoc3/my_data/voice_embs_visuals_metadata'
         self.train_singer_metadata = pickle.load(open(os.path.join(metadata_path, os.path.basename(SIE_model_path), os.path.basename(SIE_feat_dir), 'train', f'voices_metadata{pkl_fn_extras}.pkl'), 'rb'))
         self.val_singer_metadata = pickle.load(open(os.path.join(metadata_path, os.path.basename(SIE_model_path), os.path.basename(SIE_feat_dir), 'val', f'voices_metadata{pkl_fn_extras}.pkl'), 'rb'))
         self.loss_names = ['recon', 'cc', 'sie', 'total']
@@ -73,6 +76,18 @@ class AutoSvc(object):
             self.v_classer, self.vclass_optim = self.load_disentangle_eval(num_classes)
 
     def load_disentangle_eval(self, num_classes):
+        """
+        Loads a voice classifier model and optimizer
+
+        Args:
+            num_classes (int): Number of classes required to build classification model
+
+        Returns:
+            torch.NN.model: Classifier model
+            torch.NN.optimizer: Classifier's corresponding Optimizer
+
+        """
+        
         bottleneck = int((window_timesteps/sample_freq) * dim_neck)
         v_classer = Aux_Voice_Classifier(bottleneck, num_classes)
         v_classer = v_classer.to(self.device)
@@ -116,11 +131,9 @@ class AutoSvc(object):
         ex_path = os.path.join(SVC_models_dir, SVC_model_name, 'image_comparison', f'step_{i}')
         array_to_img(feat_npys, ex_path)
 
-
     def reset_grad(self):
         """Reset the gradient buffers."""
         self.g_optimizer.zero_grad()
-      
 
     def closeWriter(self):
         self.writer.close()
@@ -234,19 +247,25 @@ class AutoSvc(object):
                 x_identic_psnt = x_identic_psnt.squeeze(1)
                 # residual_from_psnt = residual_from_psnt.squeeze(1)
 
-                g_loss_id_prnt = F.l1_loss(SVC_input, x_identic_prnt)  
-                g_loss_id_psnt = F.l1_loss(SVC_input, x_identic_psnt)   
-
+                if loss_type == 'L1loss':
+                    g_loss_id_prnt = F.l1_loss(SVC_input, x_identic_prnt)  
+                    g_loss_id_psnt = F.l1_loss(SVC_input, x_identic_psnt)   
+                elif loss_type == 'L2loss':
+                    g_loss_id_prnt = F.mse_loss(SVC_input, x_identic_prnt)  
+                    g_loss_id_psnt = F.mse_loss(SVC_input, x_identic_psnt)   
                 recon_loss = (prnt_loss_weight * g_loss_id_prnt) + (psnt_loss_weight * g_loss_id_psnt)
                 total_loss = recon_loss.clone()
                 all_losses = [recon_loss]
                 
                 # Code semantic loss. For calculating this, there is no target embedding
                 code_reconst = self.G(x_identic_psnt, emb_org, None)
-                # gets the l1 loss between original encoder output and reconstructed encoder output
+                # gets the L1loss loss between original encoder output and reconstructed encoder output
 
                 if include_code_loss:
-                    g_loss_cd = F.l1_loss(code_real, code_reconst)
+                    if loss_type == 'L1loss':
+                        g_loss_cd = F.l1_loss(code_real, code_reconst)
+                    elif loss_type == 'L2loss':
+                        g_loss_cd = F.mse_loss(code_real, code_reconst)
                     cc_loss = (code_loss_weight * g_loss_cd)
                 else:
                     cc_loss = 0
@@ -273,7 +292,10 @@ class AutoSvc(object):
                 # pdb.set_trace()
                 if use_emb_loss:
                     cc_emb = self.sie(x_identic_psnt)
-                    cc_emb_loss = F.l1_loss(emb_org, cc_emb)
+                    if loss_type == 'L1loss':
+                        cc_emb_loss = F.l1_loss(emb_org, cc_emb)
+                    elif loss_type == 'L2loss':
+                        cc_emb_loss = F.mse_loss(emb_org, cc_emb)
                     cc_emb_loss = cc_emb_loss.detach().clone() # we don't want this loss to backprop through self.sie
                 else:
                     cc_emb_loss = 0
