@@ -7,18 +7,9 @@ import matplotlib.pyplot as plt
 from model_vc import Generator
 import soundfile as sf
 
-
-# from convert.synthesis import build_model
-# from convert.synthesis import wavegen
-
-from my_audio.world import mfsc_to_world_to_audio
 from my_audio.pitch import midi_as_onehot
 from neural.model_mod import checkpoint_model_optim_keys
-from my_os import overwrite_dir, recursive_file_retrieval
-from my_arrays import fix_feat_length, container_to_tensor, tensor_to_array, find_runs
-
-
-
+from my_os import overwrite_dir
 
 
 """Convert world pitch info to 1hot midi"""
@@ -32,31 +23,12 @@ def cont_to_onehot_midi(midi_voicing, midi_range):
     return onehot_midi
 
 
-# """Set up for multi-threading"""
-# def synthesize_audio(iterables):
-#     converted_feat = iterables[0]
-#     config = iterables[1]
-#     feat_params = iterables[2]
-#     model = iterables[3]
-#     wav_dir = iterables[4]
-#     converted_id, x_identic, aper_src, onehot_midi_src = converted_feat
-#     print(f'Processing {converted_id}...')
-#     if config.use_model.startswith('world'):
-#         feat_params['fft_size'] = 1024
-#         print('synthesizing with world vocoder now...')
-#         waveform = mfsc_to_world_to_audio(x_identic, aper_src, onehot_midi_src, feat_params)
-#     elif config.use_model.startswith('mel'):
-#         print('synthesizing with wavenet vocoder now...')
-#         waveform = wavegen(model, config.which_cuda, c=x_identic)
-#     sf.write(os.path.join(wav_dir, converted_id +'.wav'), waveform, samplerate=feat_params['sr'])
-
-
 """Currently designed to take model ckpts of 2 slightly different dictionary keys"""
 def setup_sie(device, loss_device, SIE_path, adam_init):
     sie_checkpoint = torch.load(os.path.join(SIE_path, 'saved_model.pt'), map_location='cpu')
     new_state_dict = OrderedDict()
 
-    if SIE_path.endswith('autoVc_pretrainedOnVctk_Mels80'):
+    if 'autoVc_pretrained' in SIE_path:
         model_state = 'model_b'
         sie_num_feats_used = sie_checkpoint[model_state]['module.lstm.weight_ih_l0'].shape[1]
     else:
@@ -153,25 +125,19 @@ def new_dir_setup(ask, svc_model_dir, svc_model_name):
     os.makedirs(model_dir_path +'/generated_wavs')
     os.makedirs(model_dir_path +'/image_comparison')
     os.makedirs(model_dir_path +'/input_tensor_plots')
-    files = ['model_vc.py', 'sv_converter.py', 'main.py', 'utils.py', 'train_params.py']
+    files = ['model_vc.py', 'vc_training.py', 'main.py', 'utils.py', 'train_params.py']
+    # copy_to_new_dir(model_dir_path, files)
+
+def copy_to_new_dir(dst_path, files):
 
     for file in files:
-        dst_file = os.path.join(model_dir_path, 'this_' + file)
+        dst_file = os.path.join(dst_path, 'this_' + file)
         copyfile(file, dst_file)
         with open(dst_file, 'r') as file:
             filedata = file.read()
         filedata = filedata.replace('from train_params import *', 'from this_train_params import *')
         with open(dst_file, 'w') as file:
             file.write(filedata)
-
-
-# "Process config object, reassigns values if necessary, raise exceptions"
-# def process_config():
-#     if svc_model_name == svc_ckpt_path:
-#         raise Exception("Your file name and svc_ckpt_path name can't be the same")
-#     if not ckpt_freq%int(max_cycle_iters*0.2) == 0 or not ckpt_freq%int(max_cycle_iters*0.2) == 0:
-#         raise Exception(f"ckpt_freq {ckpt_freq} and spec_freq {spec_freq} need to be a multiple of val_iter {int(max_cycle_iters*0.2)}")
-
 
 # check use_aper_feats boolean to produce total num feats being used for training
 # this is ignored in the case of mels as they don't have aper aspect
@@ -194,6 +160,12 @@ def determine_dim_size(SIE_params, SVC_params, SIE_feat_dir, SVC_feat_dir, use_a
         SIE_params['num_feats'] = SIE_params['num_harm_feats']
     if 'mel' in SVC_feat_dir:
         SVC_params['num_feats'] = SVC_params['num_harm_feats']
+    
+    try:
+        SIE_params['num_feats']
+        SIE_params['num_feats']
+    except KeyError as e:
+        raise Exception(f"KeyError: {e} \n To fix this error, edit the input features directory (default called \'example_feats\' to contain either the string \'mel\' or \'world\'")
 
     return SIE_params, SVC_params
 
@@ -209,6 +181,7 @@ def vctk_id_gender_list(csv_path='/homes/bdoc3/my_data/text_data/vctk/speaker-in
         id_list.append(line_elements[0])
         gender_list.append(line_elements[2])
     return id_list, gender_list
+
 
 def get_vocalset_gender_techs():
 

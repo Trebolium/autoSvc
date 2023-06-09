@@ -1,18 +1,19 @@
-import os
 import pickle
 import torch
 import time
 import datetime
 import torch.nn.functional as F
 import yaml
-import sys
-import pdb
-sys.path.insert(1, '/homes/bdoc3/my_utils')
+
+import sys, os
+if os.path.abspath('../my_utils') not in sys.path: sys.path.insert(1, os.path.abspath('../my_utils'))
+from neural.eval import get_accuracy
+
 import utils
 from model_vc import Aux_Voice_Classifier
 from torch.utils.tensorboard import SummaryWriter
-from data_objects.data_loaders import load_primary_dataloader
-from neural.eval import get_accuracy
+from data_loaders import load_primary_dataloader
+
 
 which_cuda = 2 #when you change this, make sure synthesis.py's device is set to same
 
