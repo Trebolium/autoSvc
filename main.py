@@ -22,8 +22,8 @@ if os.path.abspath("../my_utils") not in sys.path:
 from vc_training import AutoSvc
 from train_params import *
 from data_loaders import load_primary_dataloader
-from utils import new_dir_setup, determine_dim_size, str2bool
-
+from utils import new_dir_setup, determine_dim_size
+from my_misc import str2bool
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
