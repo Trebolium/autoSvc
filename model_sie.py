@@ -27,7 +27,7 @@ class SingerIdEncoder(nn.Module):
         ).to(device)
         self.relu = torch.nn.ReLU().to(device)
 
-        if self.class_num != None:
+        if self.class_num is not None:
             self.class_layer = nn.Sequential(
                 nn.Linear(model_embedding_size, self.class_num).to(device),
                 nn.BatchNorm1d(self.class_num),
@@ -35,8 +35,10 @@ class SingerIdEncoder(nn.Module):
             )
 
         # Cosine similarity scaling (with fixed initial parameter values)
-        self.similarity_weight = nn.Parameter(torch.tensor([10.0])).to(loss_device)
-        self.similarity_bias = nn.Parameter(torch.tensor([-5.0])).to(loss_device)
+        self.similarity_weight = nn.Parameter(
+            torch.tensor([10.0])).to(loss_device)
+        self.similarity_bias = nn.Parameter(
+            torch.tensor([-5.0])).to(loss_device)
 
         # Loss
         self.loss_fn = nn.CrossEntropyLoss().to(loss_device)
@@ -68,9 +70,10 @@ class SingerIdEncoder(nn.Module):
         embeds_raw = self.relu(self.linear(hidden[-1]))
 
         # L2-normalize it
-        embeds = embeds_raw / (torch.norm(embeds_raw, dim=1, keepdim=True) + 1e-5)
+        embeds = embeds_raw / \
+            (torch.norm(embeds_raw, dim=1, keepdim=True) + 1e-5)
 
-        if self.class_num != None:
+        if self.class_num is not None:
             class_preds = self.class_layer(embeds)
             return class_preds
         else:
@@ -87,7 +90,8 @@ class SingerIdEncoder(nn.Module):
         """
         speakers_per_batch, utterances_per_speaker = embeds.shape[:2]
 
-        # Inclusive centroids (1 per speaker). Cloning is needed for reverse differentiation
+        # Inclusive centroids (1 per speaker). Cloning is needed for reverse
+        # differentiation
         centroids_incl = torch.mean(embeds, dim=1, keepdim=True)
         centroids_incl = centroids_incl.clone() / (
             torch.norm(centroids_incl, dim=2, keepdim=True) + 1e-5
@@ -109,10 +113,11 @@ class SingerIdEncoder(nn.Module):
         mask_matrix = 1 - np.eye(speakers_per_batch, dtype=np.int)
         for j in range(speakers_per_batch):
             mask = np.where(mask_matrix[j])[0]
-            sim_matrix[mask, :, j] = (embeds[mask] * centroids_incl[j]).sum(dim=2)
+            sim_matrix[mask, :, j] = (
+                embeds[mask] * centroids_incl[j]).sum(dim=2)
             sim_matrix[j, :, j] = (embeds[j] * centroids_excl[j]).sum(dim=1)
 
-        ## Even more vectorized version (slower maybe because of transpose)
+        # Even more vectorized version (slower maybe because of transpose)
         # sim_matrix2 = torch.zeros(speakers_per_batch, speakers_per_batch, utterances_per_speaker
         #                           ).to(self.loss_device)
         # eye = np.eye(speakers_per_batch, dtype=np.int)
@@ -140,13 +145,16 @@ class SingerIdEncoder(nn.Module):
         sim_matrix = sim_matrix.reshape(
             (speakers_per_batch * utterances_per_speaker, speakers_per_batch)
         )
-        ground_truth = np.repeat(np.arange(speakers_per_batch), utterances_per_speaker)
+        ground_truth = np.repeat(
+            np.arange(speakers_per_batch),
+            utterances_per_speaker)
         target = torch.from_numpy(ground_truth).long().to(self.loss_device)
         loss = self.loss_fn(sim_matrix, target)
 
         # EER (not backpropagated)
         with torch.no_grad():
-            inv_argmax = lambda i: np.eye(1, speakers_per_batch, i, dtype=np.int)[0]
+            def inv_argmax(i): return np.eye(
+                1, speakers_per_batch, i, dtype=np.int)[0]
             labels = np.array([inv_argmax(i) for i in ground_truth])
             preds = sim_matrix.detach().cpu().numpy()
 
