@@ -1,6 +1,18 @@
-import random, argparse, yaml, pdb
+"""
+Description: This module trains an AutoSVC model
+
+Call dataloaders from which it trains the AutoSVC model.
+Look into the dataset directory for config files to determine how AutoSVC is initialised
+Create new directories for saving training session data.
+"""
+
+import random
+import argparse
+import yaml
+import pdb
 from torch.backends import cudnn
-import sys, os
+import sys
+import os
 
 if os.path.abspath("../my_utils") not in sys.path:
     sys.path.insert(
@@ -22,10 +34,10 @@ if __name__ == "__main__":
         "--ask",
         type=str2bool,
         default=True,
-        help="If False and the model name directory already exists, it will be overwritten without asking the user",
+        help="If False and the model name directory already exists" \
+            "it will be overwritten without asking the user",
     )
     config = parser.parse_args()
-
     new_dir_setup(config.ask, SVC_models_dir, SVC_model_name)
 
     cudnn.benchmark = True  # For fast training.

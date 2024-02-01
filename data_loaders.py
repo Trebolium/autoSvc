@@ -1,7 +1,11 @@
+import os
+import pickle
+import random
+import pdb
+
 import numpy as np
-import os, pickle, random, math, pdb, sys
-from multiprocessing import Process, Manager
 from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler
+
 from train_params import *
 from my_os import recursive_file_retrieval
 from my_audio.pitch import midi_as_onehot
@@ -28,7 +32,7 @@ class DuoFeatureDataset(Dataset):
         this_train_params=None,
         chosen_class_num=None,
     ):
-        if this_train_params == None:
+        if this_train_params is None:
             self.SIE_feat_dir = SIE_feat_dir
             self.SVC_feat_dir = SVC_feat_dir
             self.window_timesteps = window_timesteps
@@ -49,15 +53,17 @@ class DuoFeatureDataset(Dataset):
 
         self.ext = ".npy"
 
-        # FIXME: Much better mechanism to use than dataset percentage option as this is truly adaptable, random, doesn't require making more dirs
-        if chosen_class_num != None:
+        # FIXME: Much better mechanism to use than dataset percentage option as
+        # this is truly adaptable, random, doesn't require making more dirs
+        if chosen_class_num is not None:
             feats1_subset_dir = os.path.join(self.SIE_feat_dir, subset_name)
             # pdb.set_trace()
             dir_paths, feats1_fps = recursive_file_retrieval(
                 feats1_subset_dir, ignore_hidden_dirs=True, return_parent=False
             )
             subdirs = random.sample(
-                [os.path.basename(dir_path) for dir_path in dir_paths], chosen_class_num
+                [os.path.basename(dir_path)
+                 for dir_path in dir_paths], chosen_class_num
             )
             feats1_fps = [
                 fp for fp in feats1_fps if os.path.basename(fp).split("_")[0] in subdirs
@@ -73,7 +79,10 @@ class DuoFeatureDataset(Dataset):
                 )
             else:
                 feats1_subset_dir = os.path.abspath(
-                    os.path.join(self.SIE_feat_dir, subset_name, f".{ds_size}_size")
+                    os.path.join(
+                        self.SIE_feat_dir,
+                        subset_name,
+                        f".{ds_size}_size")
                 )
                 if not os.path.exists(feats1_subset_dir):
                     pdb.set_trace()
@@ -88,10 +97,10 @@ class DuoFeatureDataset(Dataset):
 
         if self.norm_method == "schluter":
             self.f1_total_mean, self.f1_total_std = get_norm_stats(
-                os.path.join(self.SIE_feat_dir + "train")
+                os.path.join(self.SIE_feat_dir, "train")
             )
             self.f2_total_mean, self.f2_total_std = get_norm_stats(
-                os.path.join(self.SVC_feat_dir + "train")
+                os.path.join(self.SVC_feat_dir, "train")
             )
 
         num_songs = 0
@@ -137,15 +146,19 @@ class DuoFeatureDataset(Dataset):
             feats2_features[:, : self.feats2_num_feats],
         )
         # crop feats
-        spec1_trimmed, start_step = fix_feat_length(spec1, self.window_timesteps)
-        spec2_trimmed, _ = fix_feat_length(spec2, self.window_timesteps, start_step)
+        spec1_trimmed, start_step = fix_feat_length(
+            spec1, self.window_timesteps)
+        spec2_trimmed, _ = fix_feat_length(
+            spec2, self.window_timesteps, start_step)
 
         if self.norm_method == "schluter":
             spec1_normmed = norm_feat_arr(
-                spec1_trimmed, self.norm_method, (self.f1_total_mean, self.f1_total_std)
+                spec1_trimmed, self.norm_method, (
+                    self.f1_total_mean, self.f1_total_std)
             )
             spec2_normmed = norm_feat_arr(
-                spec2_trimmed, self.norm_method, (self.f2_total_mean, self.f2_total_std)
+                spec2_trimmed, self.norm_method, (
+                    self.f2_total_mean, self.f2_total_std)
             )
         else:
             spec1_normmed = norm_feat_arr(spec1_trimmed, self.norm_method)
@@ -159,10 +172,13 @@ class DuoFeatureDataset(Dataset):
             else:
                 pitch_fn = fn
 
-            target_file = os.path.join(self.pitch_dir, "train", singer_id, pitch_fn)
-            # find corresponding file from pitch dir and return pitch_predictions
+            target_file = os.path.join(
+                self.pitch_dir, "train", singer_id, pitch_fn)
+            # find corresponding file from pitch dir and return
+            # pitch_predictions
             if not os.path.exists(target_file):
-                target_file = os.path.join(self.pitch_dir, "val", singer_id, pitch_fn)
+                target_file = os.path.join(
+                    self.pitch_dir, "val", singer_id, pitch_fn)
 
             if "crepe_data" in self.pitch_dir:
                 crepe_data = np.load(target_file)
@@ -187,7 +203,7 @@ class DuoFeatureDataset(Dataset):
                     )
                 else:
                     midi_trimmed = midi_contour[
-                        start_step : (start_step + self.window_timesteps)
+                        start_step: (start_step + self.window_timesteps)
                     ]
                 onehot_midi = midi_as_onehot(midi_trimmed, self.midi_range)
             except Exception as e:
@@ -195,7 +211,9 @@ class DuoFeatureDataset(Dataset):
                 pdb.set_trace()
 
         else:
-            onehot_midi = np.zeros((self.window_timesteps, len(self.midi_range) + 1))
+            onehot_midi = np.zeros(
+                (self.window_timesteps, len(
+                    self.midi_range) + 1))
 
         return spec1_normmed, spec2_normmed, onehot_midi, fn, start_step, index
 
@@ -210,47 +228,6 @@ class DuoFeatureDataset(Dataset):
     Dataset indexed by singerIDs. Each dataset entry contains a list of features related to one singer (the number of uttrs per singer varies)
     Datsset entries are tuples that include features (array), singerID (str) and uttrsID (str)
 """
-# class SingleFeatureDataset(Dataset):
-
-#     def __init__(self, num_feats, feat_dir):
-
-#         ext = '.npy'
-#         _, fps = recursive_file_retrieval(feat_dir) # explicitly given outside config to specify whether train or val subset used here
-#         cleaned_fps = [fp for fp in sorted(fps) if fp.endswith(ext) and not fp.startswith('.')]
-#         num_songs = 0
-#         singer_clips = {}
-#         for file_path in cleaned_fps:
-#             singer_id, uttrs_id = os.path.basename(file_path).split('_')[0], os.path.basename(file_path).split('_')[1][:len(ext)]
-#             features = np.load(file_path)
-#             num_songs += 1
-#             if singer_id not in singer_clips.keys():
-#                 singer_clips[singer_id] = [(features, singer_id, uttrs_id)]
-#             else:
-#                 singer_clips[singer_id].append((features, singer_id, uttrs_id))
-#         # this compression is necessary for instances when some singers have multiple entries and others do not"
-#         self.dataset = [content for content in singer_clips.values()]
-#         self.num_songs = num_songs
-#         self.num_feats = num_feats
-
-#     def __getitem__(self, index):
-
-#         voice_meta = self.dataset[index]
-#         # chooses a random uttr here
-#         feats, singer_id, example_id = voice_meta[random.randint(0,len(voice_meta)-1)]
-#         # crop feats
-#         if SVC_pitch_cond:
-#             feats_spec, feats_pitch = process_uttrs_feats(feats, self.num_feats)
-#             return feats_spec, feats_pitch, (singer_id, example_id)
-#         else:
-#             feats_spec = process_uttrs_feats(feats, self.num_feats)
-#             return feats_spec, (singer_id, example_id)
-
-#     def __len__(self):
-#         """Return the number of spkrs."""
-#         return len(self.dataset)
-
-
-"Load the primary dataloader"
 
 
 def load_primary_dataloader(
@@ -264,16 +241,16 @@ def load_primary_dataloader(
     this_train_params=None,
 ):
     # pdb.set_trace()
-    if bs == None:
+    if bs is None:
         batch_size = batch_size
     else:
         batch_size = bs
-    if workers == None:
+    if workers is None:
         num_workers = num_workers
     else:
         num_workers = workers
 
-    if this_train_params == None:
+    if this_train_params is None:
         dataset = DuoFeatureDataset(
             SIE_feats_params["num_feats"],
             SVC_feats_params["num_feats"],
@@ -331,11 +308,13 @@ def generate_loaders(datasets, ds_labels):
         "Take a fraction of the datasets as validation subset"
         d_idx_list = list(range(current_ds_size))
         if i != 3:
-            train_uttrs_idxs = random.sample(d_idx_list, int(current_ds_size * 0.8))
+            train_uttrs_idxs = random.sample(
+                d_idx_list, int(current_ds_size * 0.8))
             ds_ids_train_idxs.append(
                 (ds_labels[i], [x[2] for x in ds], train_uttrs_idxs)
             )
-            val_uttrs_idxs = [x for x in d_idx_list if x not in train_uttrs_idxs]
+            val_uttrs_idxs = [
+                x for x in d_idx_list if x not in train_uttrs_idxs]
             val_sampler = SubsetRandomSampler(val_uttrs_idxs)
             val_loader = DataLoader(
                 ds,
