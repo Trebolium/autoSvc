@@ -14,10 +14,10 @@ from torch.backends import cudnn
 import sys
 import os
 
-if os.path.abspath("../my_utils") not in sys.path:
-    sys.path.insert(
-        1, os.path.abspath("../my_utils")
-    )  # only need to do this once in the main script
+this_script_dir = os.path.dirname(os.path.abspath(__file__))
+super_dir = os.path.dirname(this_script_dir)
+my_utils_dir = os.path.join(super_dir, 'my_utils')
+if os.path.abspath(my_utils_dir) not in sys.path: sys.path.insert(1, os.path.abspath(my_utils_dir))
 
 from vc_training import AutoSvc
 from train_params import *

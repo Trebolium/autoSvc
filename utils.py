@@ -1,21 +1,25 @@
-import os, shutil, yaml, torch, pickle, pdb, csv, random
+import os
+import torch
+import pdb
+import csv
 from shutil import copyfile
+
+import numpy as np
+
 from model_sie import SingerIdEncoder
 from collections import OrderedDict
-import numpy as np
-import matplotlib.pyplot as plt
 from model_vc import Generator
-import soundfile as sf
 
 from my_audio.pitch import midi_as_onehot
 from neural.model_mod import checkpoint_model_optim_keys
 from my_os import overwrite_dir
 
 
-"""Convert world pitch info to 1hot midi"""
+
 
 
 def cont_to_onehot_midi(midi_voicing, midi_range):
+    """Convert world pitch info to 1hot midi"""
     midi_contour = midi_voicing[:, 0]
     unvoiced = (
         midi_voicing[:, 1].astype(int) == 1
@@ -29,13 +33,14 @@ def cont_to_onehot_midi(midi_voicing, midi_range):
 """Currently designed to take model ckpts of 2 slightly different dictionary keys"""
 
 
-def setup_sie(device, loss_device, SIE_path, adam_init):
+def setup_sie(device, loss_device, SIE_path, adam_init, qians_pretrained_model=False):
+    """Build SIE encoder model and optimizer using ckpt pathway"""
     sie_checkpoint = torch.load(
         os.path.join(SIE_path, "saved_model.pt"), map_location="cpu"
     )
     new_state_dict = OrderedDict()
 
-    if "autoVc_pretrained" in SIE_path:
+    if qians_pretrained_model:
         model_state = "model_b"
         sie_num_feats_used = sie_checkpoint[model_state][
             "module.lstm.weight_ih_l0"
@@ -45,12 +50,12 @@ def setup_sie(device, loss_device, SIE_path, adam_init):
         sie_num_feats_used = sie_checkpoint[model_state]["lstm.weight_ih_l0"].shape[1]
     sie = SingerIdEncoder(device, loss_device, sie_num_feats_used)
 
-    if SIE_path.endswith("autoVc_pretrainedOnVctk_Mels80"):
+    if qians_pretrained_model:
         new_state_dict["similarity_weight"] = sie.similarity_weight
         new_state_dict["similarity_bias"] = sie.similarity_bias
 
     for key, val in sie_checkpoint[model_state].items():
-        if SIE_path.endswith("autoVc_pretrainedOnVctk_Mels80"):
+        if qians_pretrained_model:
             key = key[7:]  # gets right of the substring 'module'
             if key.startswith("embedding"):
                 key = "linear." + key[10:]
@@ -73,7 +78,7 @@ def setup_sie(device, loss_device, SIE_path, adam_init):
     return sie, sie_num_feats_used
 
 
-"""Currently designed to initiate G in two ways, based on train_param variables"""
+
 
 
 def setup_gen(
@@ -87,7 +92,14 @@ def setup_gen(
     svc_ckpt_path,
     adam_init,
 ):
-    G = Generator(dim_neck, dim_emb, dim_pre, sample_freq, num_feats, pitch_dim)
+    """Currently designed to initiate G in two ways, based on train_param variables"""
+    G = Generator(
+        dim_neck,
+        dim_emb,
+        dim_pre,
+        sample_freq,
+        num_feats,
+        pitch_dim)
     g_optimizer = torch.optim.Adam(G.parameters(), adam_init)
 
     if svc_ckpt_path != "":
@@ -119,15 +131,8 @@ def setup_gen(
     return G, g_optimizer, train_latest_step
 
 
-# this function seems like a hack - find out the standard method for passing boolean values as parser args
-def str2bool(v):
-    return v.lower() in ("true")
-
-
-"finds the index for each new song in dataset"
-
-
 def new_song_idx(dataset):
+    "finds the index for each new song in dataset"
     new_song_idxs = []
     song_idxs = list(range(255))
     for song_idx in song_idxs:
@@ -138,23 +143,23 @@ def new_song_idx(dataset):
     return new_song_idxs
 
 
-"Setup and populate new directory for model"
-
-
 def new_dir_setup(ask, svc_model_dir, svc_model_name):
+    """Make new directory, ask whether to overwrite if it already exists"""
     model_dir_path = os.path.join(svc_model_dir, svc_model_name)
     overwrite_dir(model_dir_path, ask)
     os.makedirs(model_dir_path + "/ckpts")
     os.makedirs(model_dir_path + "/generated_wavs")
     os.makedirs(model_dir_path + "/image_comparison")
     os.makedirs(model_dir_path + "/input_tensor_plots")
-    files = ["model_vc.py", "vc_training.py", "main.py", "utils.py", "train_params.py"]
-    # copy_to_new_dir(model_dir_path, files)
+    files = ["train_params.py"]
+    copy_to_new_dir(model_dir_path, files)
 
 
 def copy_to_new_dir(dst_path, files):
+    """Make copy of file in new directory"""
     for file in files:
         dst_file = os.path.join(dst_path, "this_" + file)
+        file = os.path.join(os.path.dirname(os.path.abspath(__file__)), file)
         copyfile(file, dst_file)
         with open(dst_file, "r") as file:
             filedata = file.read()
@@ -165,11 +170,24 @@ def copy_to_new_dir(dst_path, files):
             file.write(filedata)
 
 
-# check use_aper_feats boolean to produce total num feats being used for training
-# this is ignored in the case of mels as they don't have aper aspect
 def determine_dim_size(
     SIE_params, SVC_params, SIE_feat_dir, SVC_feat_dir, use_aper_feats
 ):
+    """
+    Calculate total dim-size of all (not just spectral) features.
+    
+    Args:
+        SIE_params (dict): Details of features sent to SIE encoder input
+        SVC_params (dict): Details of features sent to SVC encoder input
+        SIE_feat_dir (str): Pathway to features for SIE encoder input
+        SVC_feat_dir (str): Pathway to features for SVC encoder input
+        use_aper_feats (bool): Determines whether feats include aperiodicity info
+
+    Return:
+        dict: updated version of SIE_params
+        dict: updated version of SVC_params
+
+    """
     if use_aper_feats:
         if (
             "world" in SIE_feat_dir
@@ -204,130 +222,6 @@ def determine_dim_size(
     return SIE_params, SVC_params
 
 
-def vctk_id_gender_list(
-    csv_path="/homes/bdoc3/my_data/text_data/vctk/speaker-info.txt",
-):
-    f = open(csv_path, "r")
-    header = f.readline()
-    lines = f.readlines()
-    id_list = []
-    gender_list = []
-    for line in lines:
-        line_elements = [el for el in line.split(" ") if el != ""]
-        id_list.append(line_elements[0])
-        gender_list.append(line_elements[2])
-    return id_list, gender_list
-
-
-def get_vocalset_gender_techs():
-    singing_techniques = [
-        "belt",
-        "lip_trill",
-        "straight",
-        "vocal_fry",
-        "vibrato",
-        "breathy",
-    ]
-    gender_group_labels_arr = []
-    technique_group_labels_arr = []
-    for voice_meta in metad_by_singer_list:
-        voice_fns = substring_inclusion(voice_meta[2:], singing_techniques)
-        print(len(voice_fns))
-
-        for fn in voice_fns:
-            # count += 1
-
-            if fn.startswith("m"):
-                gender_group_labels_arr.append("male")
-            elif fn.startswith("f"):
-                gender_group_labels_arr.append("female")
-
-            st_found = False
-            for st_i, st in enumerate(singing_techniques):
-                if st in fn:
-                    technique_group_labels_arr.append(st_i)
-                    st_found = True
-            if not st_found:
-                pdb.set_trace()
-                raise Exception("St not found")
-
-    gender_group_labels_arr = np.asarray(gender_group_labels_arr)
-    all_labels_arrs.append(gender_group_labels_arr)
-    all_label_names.append("gender")
-    all_labels_class_sizes.append(2)
-
-    technique_group_labels_arr = np.asarray(technique_group_labels_arr)
-    all_labels_arrs.append(technique_group_labels_arr)
-    all_label_names.append("singing_technique")
-    all_labels_class_sizes.append(config.max_num_techs)
-    return gender_group_labels_arr, technique_group_labels_arr
-
-
-def get_vocadito_gender():
-    gender_group_labels_arr = []
-    csv_path = "/homes/bdoc3/my_data/text_data/vocadito/vocadito_metadata.csv"
-    f = open(csv_path, "r")
-    reader = csv.reader(f)
-    header = next(reader)
-    singer_meta = [row for row in reader]
-    perf_key_meta_list = [row[0] for row in singer_meta]
-    gender_meta_list = [row[4] for row in singer_meta]
-
-    for voice_meta in metad_by_singer_list:
-        uttrs_fps = voice_meta[2:]
-        for fp in uttrs_fps:
-            track_name = os.path.basename(fp)[:-4]
-            track_int = track_name.split("_")[1]
-            try:
-                idx = perf_key_meta_list.index(track_int)
-            except ValueError as e:
-                print(e)
-                continue
-
-            gender = gender_meta_list[idx]
-            if "m" in gender.lower():
-                gender_group_labels_arr.append("male")
-            elif "f" in gender.lower():
-                gender_group_labels_arr.append("female")
-            else:
-                raise Exception(
-                    f"Gender value not recognised for excerpt {track_name} in csv row {idx}"
-                )
-
-    gender_group_labels_arr = np.asarray(gender_group_labels_arr)
-    all_labels_arrs.append(gender_group_labels_arr)
-    all_label_names.append("gender")
-    all_labels_class_sizes.append(1)
-    return gender_group_labels_arr
-
-
-def get_vctk_gender():
-    id_list, gender_list = vctk_id_gender_list()
-    gender_group_labels_arr = []
-    for voice_meta in metad_by_singer_list:
-        uttrs_fps = voice_meta[2:]
-        for fp in uttrs_fps:
-            track_name = os.path.basename(fp)[:-4]
-            singer_id = track_name.split("_")[0]
-            idx = id_list.index(singer_id)
-
-            gender = gender_list[idx]
-            if "m" in gender.lower():
-                gender_group_labels_arr.append("male")
-            elif "f" in gender.lower():
-                gender_group_labels_arr.append("female")
-            else:
-                raise Exception(
-                    f"Gender value not recognised for excerpt {track_name} in csv row {idx}"
-                )
-
-    gender_group_labels_arr = np.asarray(gender_group_labels_arr)
-    all_labels_arrs.append(gender_group_labels_arr)
-    all_label_names.append("gender")
-    all_labels_class_sizes.append(1)
-    return gender_group_labels_arr
-
-
 def get_damp_gender(
     ignore_unknowns=False,
     csv_path="/homes/bdoc3/my_data/text_data/damp/intonation_metadata.csv",
@@ -345,6 +239,7 @@ def get_damp_gender(
             (row[0].split("_")[0], row[8]) for row in singer_meta if row[8] != " None"
         ]
     else:
-        performer_gender_list = [(row[0].split("_")[0], row[8]) for row in singer_meta]
+        performer_gender_list = [(row[0].split("_")[0], row[8])
+                                 for row in singer_meta]
 
     return performer_gender_list

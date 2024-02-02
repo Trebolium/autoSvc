@@ -226,7 +226,7 @@ if __name__ == "__main__":
         use_aper_feats = False
         use_avg_singer_embs = True
         adam_init = 0.0001
-        pitch_dir = "../singer-identity-encoder/example_pitch"
+        pitch_dir = "../singer-identity-encoder/damp_example_pitch"
 
     # else use our own saved train parameters to load model
     elif os.path.basename(vc_dir) == "autoSvc":

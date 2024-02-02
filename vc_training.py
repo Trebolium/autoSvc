@@ -1,18 +1,21 @@
 import datetime
 import math
-from model_vc import Aux_Voice_Classifier
-import numpy as np
 import os
 import pdb
 import pickle
-import sys
+import time
+
+import numpy as np
+import torch
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
+
+from model_vc import Aux_Voice_Classifier
+import utils
+from train_params import *
 from neural.scheduler import EarlyStopping
 from my_plot import array_to_img
 from my_os import recursive_file_retrieval
-import utils
-from train_params import *
 
 
 class AutoSvc(object):
@@ -34,7 +37,8 @@ class AutoSvc(object):
 
         # Miscellaneous.
         self.use_cuda = torch.cuda.is_available()
-        self.device = torch.device(f"cuda:{which_cuda}" if self.use_cuda else "cpu")
+        self.device = torch.device(
+            f"cuda:{which_cuda}" if self.use_cuda else "cpu")
         self.loss_device = torch.device("cpu")
         self.train_singer_metadata = pickle.load(
             open(
@@ -66,7 +70,8 @@ class AutoSvc(object):
         #     self.val_singer_metadata = self.train_singer_metadata
 
         if subset_size == 1.0:
-            self.train_iter_multiple = self.get_iter_size(SVC_feat_dir, "train")
+            self.train_iter_multiple = self.get_iter_size(
+                SVC_feat_dir, "train")
             self.val_iter_multiple = self.get_iter_size(SVC_feat_dir, "val")
         else:
             self.train_iter_multiple = self.get_iter_size(
@@ -84,7 +89,7 @@ class AutoSvc(object):
         # Build the model and tensorboard.
         print("Building model...\n")
         self.sie, self.sie_num_feats_used = utils.setup_sie(
-            self.device, self.loss_device, SIE_model_path, adam_init
+            self.device, self.loss_device, SIE_model_path, adam_init, qians_pretrained_model
         )
         self.G, self.g_optimizer, self.train_latest_step = utils.setup_gen(
             dim_neck,
@@ -106,7 +111,8 @@ class AutoSvc(object):
         self.first_time_pdb = True
         if use_aux_classer:
             num_classes = len(self.train_singer_metadata)
-            self.v_classer, self.vclass_optim = self.load_disentangle_eval(num_classes)
+            self.v_classer, self.vclass_optim = self.load_disentangle_eval(
+                num_classes)
 
     def load_disentangle_eval(self, num_classes):
         """
@@ -131,7 +137,8 @@ class AutoSvc(object):
     # this multiple is represented by iter_multiple
     def get_iter_size(self, feature_dir, subset):
         num_subset_subdirs = len(os.listdir(os.path.join(feature_dir, subset)))
-        _, subset_fps = recursive_file_retrieval(os.path.join(feature_dir, subset))
+        _, subset_fps = recursive_file_retrieval(
+            os.path.join(feature_dir, subset))
         if use_loader == "damp":
             chunks_per_track = 30  # based on the average time of a track
         elif use_loader == "vctk":
@@ -139,13 +146,18 @@ class AutoSvc(object):
         elif use_loader == "vocadito":
             chunks_per_track = 6
         avg_uttrs_per_spkr = len(subset_fps) / num_subset_subdirs
-        iter_multiple = int((avg_uttrs_per_spkr * chunks_per_track) // batch_size)
+        iter_multiple = int(
+            (avg_uttrs_per_spkr * chunks_per_track) // batch_size)
         return iter_multiple
 
     def save_by_val_loss(self, current_loss):
-        # Overwrite the latest version of the model whenever validation's ge2e loss is lower than previously
+        # Overwrite the latest version of the model whenever validation's ge2e
+        # loss is lower than previously
         if current_loss <= self.prev_lowest_val_loss:
-            dst_path = os.path.join(SVC_models_dir, SVC_model_name, "saved_model.pt")
+            dst_path = os.path.join(
+                SVC_models_dir,
+                SVC_model_name,
+                "saved_model.pt")
             torch.save(
                 {
                     "step": self.train_latest_step,
@@ -187,11 +199,14 @@ class AutoSvc(object):
             et = time.time() - self.start_time
             et = str(datetime.timedelta(seconds=et))[:-7]
             # if mode == 'train':
-            log = "Elapsed [{}], Mode {}, Iter [{}/{}]".format(et, mode, i, max_iters)
+            log = "Elapsed [{}], Mode {}, Iter [{}/{}]".format(
+                et, mode, i, max_iters)
             for j in range(len(interlog_losses_dict)):
                 key = self.loss_names[j]
-                avg_loss_per_pass = interlog_losses_dict[key] / interlog_counter
-                log += f", interlog_{key}_loss: " + "{:.4f}".format(avg_loss_per_pass)
+                avg_loss_per_pass = interlog_losses_dict[key] / \
+                    interlog_counter
+                log += f", interlog_{key}_loss: " + \
+                    "{:.4f}".format(avg_loss_per_pass)
                 intercycle_losses_dict[key] += avg_loss_per_pass
                 interlog_losses_dict[key] = 0.0
             interlog_counter = 0
@@ -208,7 +223,9 @@ class AutoSvc(object):
         for loss_name in self.loss_names:
             interlog_losses_dict[loss_name] = 0.0
         intercycle_losses_dict = interlog_losses_dict.copy()
-        interlog_counter = 0  # exists because a proceeding train cycle may not start with (iter % log_step) = 0 - relevant when calculating avg losses and printing
+        # exists because a proceeding train cycle may not start with (iter %
+        # log_step) = 0 - relevant when calculating avg losses and printing
+        interlog_counter = 0
         for _ in range(iter_multiple):
             data_iter = iter(data_loader)
             for i in range(
@@ -239,7 +256,8 @@ class AutoSvc(object):
 
                 # concat where necessary
                 if SIE_pitch_cond:
-                    SIE_input = np.concatenate((SIE_feats_npy, onehot_midi_npy), axis=2)
+                    SIE_input = np.concatenate(
+                        (SIE_feats_npy, onehot_midi_npy), axis=2)
                 else:
                     SIE_input = SIE_feats_npy
                 # if SVC_pitch_cond:
@@ -265,7 +283,8 @@ class AutoSvc(object):
                 )
                 SIE_input = torch.from_numpy(SIE_input).to(self.device).float()
                 if SVC_feat_dir != "":
-                    SVC_input = torch.from_numpy(SVC_input).to(self.device).float()
+                    SVC_input = torch.from_numpy(
+                        SVC_input).to(self.device).float()
                 else:
                     SVC_input = SIE_input
 
@@ -333,9 +352,11 @@ class AutoSvc(object):
                 total_loss = recon_loss.clone()
                 all_losses = [recon_loss]
 
-                # Code semantic loss. For calculating this, there is no target embedding
+                # Code semantic loss. For calculating this, there is no target
+                # embedding
                 code_reconst = self.G(x_identic_psnt, emb_org, None)
-                # gets the L1loss loss between original encoder output and reconstructed encoder output
+                # gets the L1loss loss between original encoder output and
+                # reconstructed encoder output
 
                 if include_code_loss:
                     if loss_type == "L1loss":
@@ -380,8 +401,9 @@ class AutoSvc(object):
                 total_loss += cc_emb_loss
                 all_losses.append(cc_emb_loss)
 
-                ########## OLD LOSS VERSION ^^^
-                # remember that l1_loss gives you mean over batch, unless specificed otherwise
+                # OLD LOSS VERSION ^^^
+                # remember that l1_loss gives you mean over batch, unless
+                # specificed otherwise
 
                 # if train do backprop
                 if mode == "train":
@@ -397,7 +419,8 @@ class AutoSvc(object):
                             np.rot90(SVC_feats_npy[0]),
                             np.rot90(x_identic_prnt.cpu().data.numpy()[0]),
                         ]
-                        self.plot_comparisons(feat_npys, self.train_latest_step)
+                        self.plot_comparisons(
+                            feat_npys, self.train_latest_step)
 
                 all_losses.append(total_loss)
                 # all_losses = [recon_loss, cc_loss, cc_emb_loss, total_loss]
@@ -406,9 +429,7 @@ class AutoSvc(object):
                     key = self.loss_names[j]
                     interlog_losses_dict[key] += float(all_losses[j])
 
-                if i % log_step == 0 or i == (
-                    this_cycle_initial_step + num_loader_iters
-                ):
+                if i % log_step == 0:
                     avg_loss_print(interlog_counter)
 
                     if i % ckpt_freq == 0:
@@ -425,7 +446,8 @@ class AutoSvc(object):
                         torch.save(save_dict, dst_path)
                         print(f"Saved model at {dst_path}")
 
-            # update this_cycle_initial_step for when you start next cycle of iter_multiple
+            # update this_cycle_initial_step for when you start next cycle of
+            # iter_multiple
             this_cycle_initial_step = i
 
         """FINISH CYCLE"""
@@ -436,16 +458,20 @@ class AutoSvc(object):
             intercycle_losses_dict[loss_name] = intercycle_losses_dict[
                 loss_name
             ] / math.ceil(num_loader_iters / log_step)
-            log += f"{loss_name}" + "{:.4f}, ".format(intercycle_losses_dict[loss_name])
+            log += f"{loss_name}" + \
+                "{:.4f}, ".format(intercycle_losses_dict[loss_name])
         print(log)
 
-        # when cycle finished in val mode, save loss, EarlyStopping check, save plot
+        # when cycle finished in val mode, save loss, EarlyStopping check, save
+        # plot
         if mode.startswith(
             "val"
         ):  # because this string is extended to represent tthe different training sets if evall_all is chosen
-            # NEED TO EMPLOY THIS ONLY AFTER THE END OF EACH VAL ITER CYCLE, NOT INDIVIDUALLY AFTER EACH VAL
+            # NEED TO EMPLOY THIS ONLY AFTER THE END OF EACH VAL ITER CYCLE,
+            # NOT INDIVIDUALLY AFTER EACH VAL
 
-            # if EarlyStopping, read the docstrings if necessary, this section is unorthodox
+            # if EarlyStopping, read the docstrings if necessary, this section
+            # is unorthodox
             watched_loss = intercycle_losses_dict[early_stopping_loss]
             check = self.EarlyStopping.check(watched_loss)
             if check == "lowest_loss":

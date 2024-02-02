@@ -1,8 +1,12 @@
 # NOTE: If you want full control for model architecture. please take a look
-# at the code and change whatever you want. Some hyper parameters are hardcoded.
+# at the code and change whatever you want. Some hyper parameters are
+# hardcoded.
 
 from synth_params import SVC_feat_dir
-import yaml, os
+import yaml
+import os
+import pdb
+
 
 with open(os.path.join(SVC_feat_dir, "feat_params.yaml")) as File:
     feat_params = yaml.load(File, Loader=yaml.FullLoader)
@@ -119,7 +123,8 @@ hparams = Map(
         "stacks": 4,
         "residual_channels": 512,
         "gate_channels": 512,  # split into 2 gropus internally for gated activation
-        "skip_out_channels": 256,  # int(feat_params['sr'] * (feat_params['frame_dur_ms']/1000))
+        # int(feat_params['sr'] * (feat_params['frame_dur_ms']/1000))
+        "skip_out_channels": 256,
         "dropout": 1 - 0.95,
         "kernel_size": 3,
         # If True, apply weight normalization as same as DeepVoice3
@@ -134,7 +139,8 @@ hparams = Map(
         # otherwise repeat features to adjust time resolution
         "upsample_conditional_features": True,
         # should np.prod(upsample_scales) == hop_size
-        "upsample_scales": [4, 4, 4, 4],  # [2,2,4,5] is needed to support 80 hopsize
+        # [2,2,4,5] is needed to support 80 hopsize
+        "upsample_scales": [4, 4, 4, 4],
         # Freq axis kernel size for upsampling network
         "freq_axis_kernel_size": 3,
         # Global conditioning (set negative value to disable)
